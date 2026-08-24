@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Ícone do PeritaVision. Traçado (não preenchido), 24dp, cor preta neutra: quem
+  desenha aplica o tint pelo tema (Icon(painter = ..., tint = ...)).
+  Feito à mão de propósito — material-icons-extended está congelado desde o
+  Compose 1.7 e não vale arriscar o build por 8 ícones.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M6.5,10 C8.157,10 9.5,11.343 9.5,13 C9.5,14.657 8.157,16 6.5,16 C4.843,16 3.5,14.657 3.5,13 C3.5,11.343 4.843,10 6.5,10 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M17.5,10 C19.157,10 20.5,11.343 20.5,13 C20.5,14.657 19.157,16 17.5,16 C15.843,16 14.5,14.657 14.5,13 C14.5,11.343 15.843,10 17.5,10 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M9.5,12.6 L14.5,12.6"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M3.5,12.4 L1.8,9"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M20.5,12.4 L22.2,9"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Ícone do PeritaVision. Traçado (não preenchido), 24dp, cor preta neutra: quem
+  desenha aplica o tint pelo tema (Icon(painter = ..., tint = ...)).
+  Feito à mão de propósito — material-icons-extended está congelado desde o
+  Compose 1.7 e não vale arriscar o build por 8 ícones.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M8.3,4.5 L15.7,4.5 L17,6.5 L19,6.5 C20.105,6.5 21,7.395 21,8.5 L21,16.5 C21,17.605 20.105,18.5 19,18.5 L5,18.5 C3.895,18.5 3,17.605 3,16.5 L3,8.5 C3,7.395 3.895,6.5 5,6.5 L7,6.5 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M12,9.1 C13.878,9.1 15.4,10.622 15.4,12.5 C15.4,14.378 13.878,15.9 12,15.9 C10.122,15.9 8.6,14.378 8.6,12.5 C8.6,10.622 10.122,9.1 12,9.1 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

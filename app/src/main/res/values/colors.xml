@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Só o que o ANDROID precisa antes do Compose desenhar (fundo da janela, para
+  não dar um flash branco na abertura). A paleta de verdade do app vive em
+  ui/Color.kt — não duplique cores aqui.
+-->
+<resources>
+    <color name="pv_fundo">#FFF4F6FA</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

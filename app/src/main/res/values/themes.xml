@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tema da JANELA (não do Compose). Serve para duas coisas:
+  1. windowBackground na cor do tema, para a abertura do app não piscar branco;
+  2. barras de sistema transparentes, porque a tela desenha de ponta a ponta
+     (enableEdgeToEdge na MainActivity) e o cabeçalho respeita os insets.
+-->
+<resources>
+    <style name="Theme.Peritavision" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/pv_fundo</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

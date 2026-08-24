@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  O backend de desenvolvimento roda em HTTP simples (sem HTTPS) num IP da rede
+  local. O Android bloqueia HTTP por padrao desde o Android 9, entao liberamos
+  APENAS as faixas de IP privadas usadas em rede local e o emulador.
+
+  EM PRODUCAO: remover este arquivo. O backend deve ficar atras de HTTPS.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Emulador do Android Studio falando com o PC hospedeiro -->
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <!-- Faixas privadas de rede local (Wi-Fi do escritorio, roteador, hotspot) -->
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">192.168.1.0</domain>
+    </domain-config>
+    <!--
+      Rede local costuma ter IP variavel (192.168.15.x, 10.0.x.x, 172.20.x.x...).
+      Listar dominio por dominio quebraria na hora da demonstracao, entao o
+      padrao de DEBUG permite HTTP em qualquer endereco. Nao afeta release.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

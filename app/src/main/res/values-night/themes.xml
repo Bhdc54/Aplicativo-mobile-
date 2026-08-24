@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TEMA CLARO SEMPRE (24/08/2026): este arquivo existia para dar a versao
+  escura da janela quando o aparelho estivesse em modo escuro. Como o app
+  agora e claro sempre (ver ui/Theme.kt), esta variante -night ESPELHA o tema
+  claro de values/themes.xml — senao a janela abriria escura (flash escuro na
+  abertura) num tablet em modo escuro. Nao apague o arquivo sem apagar a
+  pasta: um values-night vazio faria o sistema cair no Material escuro padrao.
+-->
+<resources>
+    <style name="Theme.Peritavision" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/pv_fundo</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

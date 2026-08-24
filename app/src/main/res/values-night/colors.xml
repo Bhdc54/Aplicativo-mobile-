@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TEMA CLARO SEMPRE (24/08/2026): espelha values/colors.xml — ver themes.xml. -->
+<resources>
+    <color name="pv_fundo">#FFF4F6FA</color>
+</resources>

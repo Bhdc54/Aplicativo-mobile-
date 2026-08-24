@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Espaço reservado para a LOGO DA SUA EMPRESA.
+
+  Como trocar (sem mexer em código Kotlin):
+  1. No Android Studio, clique com o botão direito em res/drawable → New → Image Asset
+     (ou simplesmente arraste um arquivo .png para esta pasta).
+  2. Nomeie o arquivo exatamente "logo" (ex.: logo.png).
+  3. Apague este arquivo logo.xml — os dois não podem coexistir com o mesmo nome.
+  O app usa "R.drawable.logo" automaticamente; não precisa tocar em MainActivity.kt.
+
+  Este marcador é BRANCO sobre fundo TRANSPARENTE de propósito: a MainActivity
+  desenha o quadradinho azul do tema atrás dele. Se a sua logo já tiver fundo
+  próprio, também funciona — ela é recortada no mesmo quadrado arredondado.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <!-- Escudo: a cadeia de custódia. -->
+    <path
+        android:pathData="M32,7 L54,16 L54,34 C54,45.5 45,54.5 32,58.5 C19,54.5 10,45.5 10,34 L10,16 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Lente: o olhar do perito. -->
+    <path
+        android:pathData="M32,23 C36.418,23 40,26.582 40,31 C40,35.418 36.418,39 32,39 C27.582,39 24,35.418 24,31 C24,26.582 27.582,23 32,23 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4" />
+    <path
+        android:pathData="M32,28 C33.657,28 35,29.343 35,31 C35,32.657 33.657,34 32,34 C30.343,34 29,32.657 29,31 C29,29.343 30.343,28 32,28 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>
