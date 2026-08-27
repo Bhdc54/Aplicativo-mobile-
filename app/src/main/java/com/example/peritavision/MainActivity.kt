@@ -61,6 +61,7 @@ import com.example.peritavision.domain.Evidencia
 import com.example.peritavision.domain.SelarCustodia
 import com.example.peritavision.domain.TipoEvidencia
 import com.example.peritavision.net.AudioStreamer
+import com.example.peritavision.net.PonteGemini
 import com.example.peritavision.net.BackendClient
 import com.example.peritavision.ui.AvisoEscuta
 import com.example.peritavision.ui.BarraDeStatus
@@ -206,6 +207,16 @@ fun CaptureScreen() {
     var usarVozDoCelular by remember { mutableStateOf(false) }
     /** Canal que leva o audio DOS OCULOS ao servico de voz do backend. */
     var audioStreamer by remember { mutableStateOf<AudioStreamer?>(null) }
+
+    // ── Assistente IA de bancada (ponte Gemini Live) — AUTOMÁTICO na sessão.
+    // Liga sozinho quando a sessão de perícia abre e desliga quando ela fecha
+    // (ver o LaunchedEffect logo depois da declaração de sessaoId). O toque no
+    // cartão vira o desliga/religa manual do perito. Com a ponte ativa, uma
+    // CÓPIA do áudio dos óculos vai ao Gemini (aviso de custódia em
+    // PonteGemini.kt); o caminho offline oficial continua intacto em paralelo.
+    var ponteGemini by remember { mutableStateOf<PonteGemini?>(null) }
+    var iaPerito by remember { mutableStateOf("") }
+    var iaResposta by remember { mutableStateOf("") }
     LaunchedEffect(voz) { voz.onStatus = { msg -> status = msg } }
 
     // ── Backend: endereco editavel, cliente e sessao aberta ────────────────
@@ -216,6 +227,47 @@ fun CaptureScreen() {
     var laudoId by remember { mutableStateOf<String?>(null) }
     var ocupado by remember { mutableStateOf(false) }
     var fotosEnviadas by remember { mutableIntStateOf(0) }
+
+    // Declaradas aqui (e não junto dos estados da IA, mais acima) porque usam
+    // sessaoId — em Kotlin, função local não enxerga variável declarada abaixo.
+    fun ligarAssistenteIa() {
+        if (ponteGemini != null) return
+        if (BuildConfig.PV_PONTE_URL.isBlank()) {
+            status = "Assistente IA: configure pv.ponte no local.properties."
+            return
+        }
+        val ponte = PonteGemini(BuildConfig.PV_PONTE_URL, sessaoId ?: "bancada-teste")
+        ponte.onStatus = { msg -> status = msg }
+        ponte.onTranscricao = { t -> iaPerito = t }
+        ponte.onResposta = { t -> iaResposta = t }
+        ponte.conectar()
+        ponteGemini = ponte
+        status = "Assistente IA conectando..."
+    }
+    fun alternarAssistenteIa() {
+        val ativa = ponteGemini
+        if (ativa != null) {
+            ativa.encerrar()
+            ponteGemini = null
+            status = "Assistente IA desligado."
+            return
+        }
+        ligarAssistenteIa()
+    }
+    // AUTOMÁTICO: sessão abriu → assistente liga sozinho; sessão fechou →
+    // desliga junto. Se o perito desligar à mão no meio da sessão, fica
+    // desligado até a próxima sessão (nada religa antes disso) — o toque
+    // dele manda mais que o automatismo.
+    LaunchedEffect(sessaoId) {
+        if (sessaoId != null) {
+            ligarAssistenteIa()
+        } else {
+            ponteGemini?.encerrar()
+            ponteGemini = null
+            iaPerito = ""
+            iaResposta = ""
+        }
+    }
 
     // Wi-Fi DOS OCULOS: o JPEG sobe pela rede do oculos, nao pelo Bluetooth.
     var wifiOculos by remember { mutableStateOf(false) }
@@ -247,6 +299,52 @@ fun CaptureScreen() {
         repeat(15) {
             runCatching { trechosLaudo = backend.obterLaudo(id) }
             kotlinx.coroutines.delay(2_000)
+        }
+    }
+
+    // ── Leitura de lacre PELOS ÓCULOS ─────────────────────────────────────
+    // O perito toca no botão, os óculos fotografam o código de barras, o
+    // servidor decodifica e consulta o Atena; a ficha do caso aparece na tela.
+    var fichaLacre by remember { mutableStateOf<BackendClient.FichaLacre?>(null) }
+    var lendoLacre by remember { mutableStateOf(false) }
+    fun lerLacrePelosOculos() {
+        val mentra = device as? MentraGlassesDevice
+        if (mentra == null || !conectado) {
+            status = "Conecte os óculos antes de ler o lacre."
+            return
+        }
+        if (lendoLacre) return
+        escopo.launch {
+            lendoLacre = true
+            try {
+                backend.baseUrl = enderecoBackend.trim()
+                backend.login(matricula.trim(), senhaPerito.trim())
+                status = "Aponte os óculos para o lacre..."
+                val cred = backend.solicitarLeituraLacre()
+                mentra.capturarFotoComAutorizacao(
+                    MentraGlassesDevice.AutorizacaoCaptura(cred.requestId, cred.webhookUrl, cred.authToken)
+                )
+                // Poll: a foto sobe pelo Wi-Fi dos óculos e o servidor decodifica.
+                var ficha: BackendClient.FichaLacre? = null
+                repeat(20) {
+                    if (ficha == null) {
+                        kotlinx.coroutines.delay(1_500)
+                        ficha = backend.obterLeituraLacre(cred.requestId)
+                    }
+                }
+                if (ficha == null) {
+                    status = "Leitura do lacre expirou — a foto chegou ao servidor? Confira o Wi-Fi dos óculos."
+                } else {
+                    fichaLacre = ficha
+                    protocolo = ficha!!.numeroProtocolo
+                    vozFeedback.falar("Lacre lido. Protocolo ${ficha!!.numeroProtocolo}.")
+                    status = "Lacre ${ficha!!.codigo} → protocolo ${ficha!!.numeroProtocolo}"
+                }
+            } catch (e: Exception) {
+                status = "Leitura do lacre: ${e.message}"
+            } finally {
+                lendoLacre = false
+            }
         }
     }
 
@@ -468,11 +566,16 @@ fun CaptureScreen() {
         streamer.conectar()
         audioStreamer = streamer
         // Cada frame do microfone dos óculos segue direto para o servidor.
-        mentra.onPcm = { pcm, _ -> streamer.enviarPcm(pcm) }
+        // Caminho oficial (offline) + cópia opcional para o assistente IA.
+        mentra.onPcm = { pcm, _ ->
+            streamer.enviarPcm(pcm)
+            ponteGemini?.enviarPcm(pcm)
+        }
     }
 
     DisposableEffect(Unit) {
         onDispose {
+            ponteGemini?.encerrar()
             voz.encerrar()
             vozFeedback.encerrar()
             audioStreamer?.encerrar()
@@ -622,8 +725,12 @@ fun CaptureScreen() {
     val cartaoServidor: @Composable () -> Unit = {
         CartaoServidor(
             destaque = passo == Passo.SESSAO,
+            // Leitura de lacre agora é PELOS ÓCULOS (o scanner da câmera do
+            // tablet saiu). No modo PHONE (sem óculos), o leitor local continua
+            // como plano B de teste.
             onLerLacre = {
-                LeitorCodigo.ler(
+                if (ehMentra) lerLacrePelosOculos()
+                else LeitorCodigo.ler(
                     context,
                     onOk = { codigo ->
                         protocolo = codigo
@@ -675,6 +782,24 @@ fun CaptureScreen() {
     }
     val cartaoEvidencia: @Composable () -> Unit = {
         ultima?.let { CartaoEvidencia(it) }
+    }
+    val cartaoFichaLacre: @Composable () -> Unit = {
+        fichaLacre?.let { f ->
+            CartaoFichaLacre(
+                ficha = f,
+                abrindo = ocupado,
+                onAbrirPericia = { iniciarSessao() },
+                onLerOutro = { fichaLacre = null; lerLacrePelosOculos() },
+            )
+        }
+    }
+    val cartaoAssistente: @Composable () -> Unit = {
+        if (ehMentra) CartaoAssistenteIa(
+            ativo = ponteGemini != null,
+            perito = iaPerito,
+            resposta = iaResposta,
+            onAlternar = { alternarAssistenteIa() },
+        )
     }
 
     Column(
@@ -732,7 +857,9 @@ fun CaptureScreen() {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Spacer(Modifier.height(2.dp))
+                    cartaoFichaLacre()
                     cartaoServidor()
+                    cartaoAssistente()
                     cartaoLaudo()
                     cartaoEvidencia()
                     RodapeMarca(NOME_EMPRESA)
@@ -759,6 +886,7 @@ fun CaptureScreen() {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Spacer(Modifier.height(2.dp))
+                    cartaoAssistente()
                     cartaoLaudo()
                     cartaoEvidencia()
                     cartaoWifi()
@@ -1152,6 +1280,130 @@ private fun CartaoLaudo(trechos: List<BackendClient.TrechoLaudo>, montando: Bool
             }
         }
         TextoApoio("Revisão e assinatura continuam no painel — aqui é acompanhamento.")
+    }
+}
+
+@Composable
+private fun CartaoFichaLacre(
+    ficha: BackendClient.FichaLacre,
+    abrindo: Boolean,
+    onAbrirPericia: () -> Unit,
+    onLerOutro: () -> Unit,
+) {
+    CartaoPv {
+        CabecalhoCartao(
+            titulo = "Lacre lido pelos óculos",
+            etiqueta = ficha.codigo,
+            tomEtiqueta = Tom.OK,
+        )
+        Spacer(Modifier.height(8.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.small)
+                .background(MaterialTheme.colorScheme.background)
+                .padding(13.dp),
+        ) {
+            Text(
+                "Protocolo ${ficha.numeroProtocolo}",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (ficha.naturezas.isNotEmpty()) {
+                Text(
+                    ficha.naturezas.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            LinhaDado("Solicitante", ficha.solicitante ?: "a confirmar")
+            LinhaDado("Unidade", ficha.unidadeRequisitante ?: "a confirmar")
+            LinhaDado("Vítima", ficha.vitima ?: "não informada")
+            LinhaDado("Data do fato", ficha.dataOcorrencia ?: "não informada")
+            LinhaDado("Objetos", "${ficha.quantidadeMateriais}", ultima = ficha.materiais.isEmpty())
+            if (ficha.materiais.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "MATERIAIS",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = PvTheme.extras.textoSuave,
+                )
+                Spacer(Modifier.height(4.dp))
+                ficha.materiais.forEach { m ->
+                    Text(
+                        "• $m",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 3.dp),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        BotaoPrimario(
+            texto = if (abrindo) "Abrindo..." else "Abrir perícia deste lacre",
+            habilitado = !abrindo,
+            onClick = onAbrirPericia,
+        )
+        Spacer(Modifier.height(8.dp))
+        BotaoContorno(texto = "Ler outro lacre", onClick = onLerOutro)
+    }
+}
+
+@Composable
+private fun CartaoAssistenteIa(
+    ativo: Boolean,
+    perito: String,
+    resposta: String,
+    onAlternar: () -> Unit,
+) {
+    CartaoPv {
+        CabecalhoCartao(
+            titulo = "Assistente IA (teste)",
+            etiqueta = if (ativo) "ativo" else "desligado",
+            tomEtiqueta = if (ativo) Tom.OK else Tom.NEUTRO,
+        )
+        if (!ativo) {
+            TextoApoio(
+                "Assistente de voz pelos óculos (Gemini). Liga sozinho quando a sessão " +
+                    "abre; aqui você religa se tiver desligado. Uma cópia do áudio vai aos " +
+                    "servidores do Google — use apenas em teste/bancada, não em caso real.",
+            )
+            Spacer(Modifier.height(10.dp))
+            BotaoContorno(texto = "Ligar assistente", onClick = onAlternar)
+            return@CartaoPv
+        }
+        Spacer(Modifier.height(8.dp))
+        if (perito.isNotBlank()) {
+            Text(
+                "Você: $perito",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+        if (resposta.isNotBlank()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(12.dp),
+            ) {
+                Text(
+                    resposta,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        if (perito.isBlank() && resposta.isBlank()) {
+            TextoApoio("Ouvindo pelos óculos — pergunte em voz alta (ex.: \"qual o próximo passo do método?\").")
+            Spacer(Modifier.height(8.dp))
+        }
+        BotaoContorno(texto = "Desligar assistente", onClick = onAlternar)
     }
 }
 
