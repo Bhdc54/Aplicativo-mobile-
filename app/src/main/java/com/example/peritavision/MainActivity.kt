@@ -196,27 +196,37 @@ fun CaptureScreen() {
     var ultima by remember { mutableStateOf<Evidencia?>(null) }
     LaunchedEffect(vozFeedback) { vozFeedback.onStatus = { msg -> status = msg } }
 
-    // ── Comando de voz ────────────────────────────────────────────────────
-    // Declarado ANTES do coletor de eventos porque ele precisa acionar a voz
-    // (uma funcao/variavel local so e visivel abaixo de onde foi declarada).
-    val voz = remember {
-        VoiceTrigger(context, onComando = { vozFeedback.falar("Capturando"); device.capturarFoto() })
-    }
-    var vozAtiva by remember { mutableStateOf(false) }
-    /** true depois que os oculos falharem em transcrever: escuta pelo celular. */
-    var usarVozDoCelular by remember { mutableStateOf(false) }
-    /** Canal que leva o audio DOS OCULOS ao servico de voz do backend. */
-    var audioStreamer by remember { mutableStateOf<AudioStreamer?>(null) }
-
     // ── Assistente IA de bancada (ponte Gemini Live) — AUTOMÁTICO na sessão.
     // Liga sozinho quando a sessão de perícia abre e desliga quando ela fecha
     // (ver o LaunchedEffect logo depois da declaração de sessaoId). O toque no
     // cartão vira o desliga/religa manual do perito. Com a ponte ativa, uma
     // CÓPIA do áudio dos óculos vai ao Gemini (aviso de custódia em
     // PonteGemini.kt); o caminho offline oficial continua intacto em paralelo.
+    // (Declarado antes do VoiceTrigger porque as falas do app consultam
+    // ponteGemini — função/variável local só é visível abaixo da declaração.)
     var ponteGemini by remember { mutableStateOf<PonteGemini?>(null) }
     var iaPerito by remember { mutableStateOf("") }
     var iaResposta by remember { mutableStateOf("") }
+
+    /** UMA voz só na bancada: com o assistente IA ativo, quem fala é o Gemini
+     *  (inclusive "Capturando" e o anúncio de sessão — instruído no servidor
+     *  da ponte); a voz sintética do Android fica para quando a IA está
+     *  desligada. Sem isto as duas vozes saíam uma por cima da outra. */
+    fun falarSeSemIa(texto: String) {
+        if (ponteGemini == null) vozFeedback.falar(texto)
+    }
+
+    // ── Comando de voz ────────────────────────────────────────────────────
+    // Declarado ANTES do coletor de eventos porque ele precisa acionar a voz
+    // (uma funcao/variavel local so e visivel abaixo de onde foi declarada).
+    val voz = remember {
+        VoiceTrigger(context, onComando = { falarSeSemIa("Capturando"); device.capturarFoto() })
+    }
+    var vozAtiva by remember { mutableStateOf(false) }
+    /** true depois que os oculos falharem em transcrever: escuta pelo celular. */
+    var usarVozDoCelular by remember { mutableStateOf(false) }
+    /** Canal que leva o audio DOS OCULOS ao servico de voz do backend. */
+    var audioStreamer by remember { mutableStateOf<AudioStreamer?>(null) }
     LaunchedEffect(voz) { voz.onStatus = { msg -> status = msg } }
 
     // ── Backend: endereco editavel, cliente e sessao aberta ────────────────
@@ -433,7 +443,7 @@ fun CaptureScreen() {
                 val aberta = backend.abrirSessao(caso.id, perfilId)
                 sessaoId = aberta.sessaoId
                 rtmpUrl = aberta.rtmpUrl
-                vozFeedback.falar("Sessão iniciada. Pode capturar.")
+                falarSeSemIa("Sessão iniciada. Pode capturar.")
                 laudoId = null
                 fotosEnviadas = 0
                 status = "Sessão aberta — pode capturar"
@@ -462,7 +472,7 @@ fun CaptureScreen() {
                 laudoId = backend.finalizarSessao(id)
                 sessaoId = null
                 rtmpUrl = null
-                vozFeedback.falar("Sessão finalizada. Laudo em processamento.")
+                falarSeSemIa("Sessão finalizada. Laudo em processamento.")
                 status = "Laudo gerado — revise e baixe no site do PeritaVision"
             } catch (e: Exception) {
                 status = "Erro ao finalizar: ${e.message}"
@@ -524,7 +534,7 @@ fun CaptureScreen() {
                     // áudio Bluetooth; senão, pelo celular). A próxima fala do
                     // perito vira a legenda desta foto — o backend ancora o
                     // primeiro trecho posterior ao pedido da captura.
-                    vozFeedback.falar("Foto capturada. Descreva a evidência.")
+                    falarSeSemIa("Foto capturada. Descreva a evidência.")
                 }
                 is GlassesEvent.ArquivoCapturado -> {
                     // Modo PHONE: o arquivo esta no celular. Sela localmente e,
@@ -536,7 +546,7 @@ fun CaptureScreen() {
                     ultima = ev
                     status = "Evidência selada (${ev.tipo.name})"
                     if (evento.tipo == TipoEvidencia.FOTO) {
-                        vozFeedback.falar("Foto capturada. Descreva a evidência.")
+                        falarSeSemIa("Foto capturada. Descreva a evidência.")
                     }
 
                     val id = sessaoId
@@ -626,7 +636,7 @@ fun CaptureScreen() {
             onComando = { intencao, ouvido ->
                 status = "Comando \"$ouvido\" → $intencao"
                 when (intencao) {
-                    "CAPTURAR" -> { vozFeedback.falar("Capturando"); device.capturarFoto() }
+                    "CAPTURAR" -> { falarSeSemIa("Capturando"); device.capturarFoto() }
                     "FINALIZAR" -> finalizarSessao()
                     // MARCAR e DESCARTAR entram junto com a narração do laudo.
                 }
