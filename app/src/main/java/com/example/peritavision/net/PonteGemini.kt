@@ -52,6 +52,9 @@ class PonteGemini(
     @Volatile private var pronto = false
     /** true depois de encerrar(): a reconexão automática para de tentar. */
     @Volatile private var encerrado = false
+    /** Guardados até o "pronto" (e reenviados após reconexão automática). */
+    @Volatile private var urlVideo: String? = null
+    @Volatile private var contextoCaso: String? = null
     private var ws: WebSocket? = null
     private val cliente = OkHttpClient()
     private val principal = Handler(Looper.getMainLooper())
@@ -94,7 +97,15 @@ class PonteGemini(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
                 when (msg.optString("tipo")) {
-                    "pronto" -> { pronto = true; onStatus("Assistente IA pronto — pode falar.") }
+                    "pronto" -> {
+                        pronto = true
+                        onStatus("Assistente IA pronto — pode falar.")
+                        // O que ficou guardado antes da sessão abrir vai agora
+                        // (e vai DE NOVO a cada reconexão — sessão nova no
+                        // Gemini não lembra da anterior).
+                        contextoCaso?.let { enviarJson("contexto", "texto", it) }
+                        urlVideo?.let { enviarJson("video", "url", it) }
+                    }
                     "transcricaoEntrada" -> onTranscricao(msg.optString("texto"))
                     "textoResposta" -> onResposta(msg.optString("texto"))
                     "erro" -> onStatus("Assistente IA: ${msg.optString("mensagem")}")
@@ -130,6 +141,24 @@ class PonteGemini(
                 onStatus("Assistente IA encerrado.")
             }
         })
+    }
+
+    private fun enviarJson(tipo: String, campo: String, valor: String) {
+        runCatching { ws?.send(JSONObject().put("tipo", tipo).put(campo, valor).toString()) }
+    }
+
+    /** URL do FLV dos óculos (a MESMA da tela "Visão dos óculos"): o servidor
+     *  puxa ~1 quadro/s dela e o Gemini passa a VER a bancada. */
+    fun definirVideo(url: String?) {
+        urlVideo = url
+        if (pronto && url != null) enviarJson("video", "url", url)
+    }
+
+    /** Ficha do caso (protocolo, solicitante, vítima, materiais...) para o
+     *  assistente responder perguntas sobre o caso. */
+    fun definirContexto(texto: String?) {
+        contextoCaso = texto
+        if (pronto && texto != null) enviarJson("contexto", "texto", texto)
     }
 
     /** Cópia do PCM16/16kHz dos óculos. Barato: se a ponte não está pronta, ignora. */

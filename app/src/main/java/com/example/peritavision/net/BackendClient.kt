@@ -40,11 +40,50 @@ class BackendClient(var baseUrl: String) {
         return t
     }
 
-    /** Resolve o protocolo (numero do caso) e devolve o id do caso. */
-    suspend fun resolverProtocolo(protocolo: String): String {
+    /** Tudo que o Atena devolveu sobre o caso ao resolver o protocolo —
+     *  usado como contexto do assistente IA, não só o id. */
+    data class CasoAtena(
+        val id: String,
+        val numeroProtocolo: String,
+        val prioridade: String?,
+        val prazoHoras: Int?,
+        val naturezas: List<String>,
+        val autoridade: String?,
+        val materiais: List<String>,
+        val exames: List<String>,
+    )
+
+    /** Resolve o protocolo (numero do caso) e devolve o caso completo do Atena. */
+    suspend fun resolverProtocolo(protocolo: String): CasoAtena {
         val r = postJson("/v1/casos/resolver", JSONObject().put("numeroProtocolo", protocolo))
-        return r.optString("id").takeIf { it.isNotBlank() }
+        val id = r.optString("id").takeIf { it.isNotBlank() }
             ?: throw BackendException("caso sem id: $r")
+        fun lista(chave: String): List<String> {
+            val a = r.optJSONArray(chave) ?: return emptyList()
+            return (0 until a.length()).mapNotNull { i ->
+                when (val v = a.opt(i)) {
+                    is String -> v
+                    is JSONObject -> buildString {
+                        append(v.optString("descricao"))
+                        val q = v.optInt("quantidade", 0)
+                        if (q > 0) append(" (quantidade: $q)")
+                        v.optString("lacreEntrada").takeIf { it.isNotBlank() }
+                            ?.let { append(", lacre de entrada $it") }
+                    }
+                    else -> null
+                }
+            }.filter { it.isNotBlank() }
+        }
+        return CasoAtena(
+            id = id,
+            numeroProtocolo = r.optString("numeroProtocolo", protocolo),
+            prioridade = r.optString("prioridade").takeIf { it.isNotBlank() },
+            prazoHoras = if (r.has("prazoHoras") && !r.isNull("prazoHoras")) r.optInt("prazoHoras") else null,
+            naturezas = lista("naturezas"),
+            autoridade = r.optString("autoridade").takeIf { it.isNotBlank() },
+            materiais = lista("materiais"),
+            exames = lista("exames"),
+        )
     }
 
     /** Pega o primeiro perfil disponivel (MVP: so existe um). */
@@ -91,6 +130,57 @@ class BackendClient(var baseUrl: String) {
     suspend fun finalizarSessao(sessaoId: String): String {
         val r = postJson("/v1/sessoes/$sessaoId/finalizar", JSONObject())
         return r.optString("laudoId")
+    }
+
+    /** Emite o webhook para os óculos fotografarem o LACRE (pré-sessão). */
+    suspend fun solicitarLeituraLacre(): CredencialCaptura {
+        val r = postJson("/v1/lacre/leituras", JSONObject())
+        return CredencialCaptura(
+            requestId = r.getString("leituraId"),
+            webhookUrl = r.getString("webhookUrl"),
+            authToken = r.getString("authToken"),
+        )
+    }
+
+    /** Ficha do caso montada a partir do código de barras do lacre + Atena. */
+    data class FichaLacre(
+        val codigo: String,
+        val numeroProtocolo: String,
+        val solicitante: String?,
+        val unidadeRequisitante: String?,
+        val vitima: String?,
+        val dataOcorrencia: String?,
+        val quantidadeMateriais: Int,
+        val naturezas: List<String>,
+        val materiais: List<String>,
+    )
+
+    /** Poll da leitura: devolve null enquanto processa; lança se status=erro. */
+    suspend fun obterLeituraLacre(leituraId: String): FichaLacre? {
+        val r = getJson("/v1/lacre/leituras/$leituraId")
+        when (r.optString("status")) {
+            "ok" -> {}
+            "erro" -> throw BackendException(r.optString("erro").ifBlank { "falha na leitura do lacre" })
+            else -> return null // aguardando_foto | processando
+        }
+        val f = r.getJSONObject("ficha")
+        val naturezas = f.optJSONArray("naturezas")
+        val materiais = f.optJSONArray("materiais")
+        return FichaLacre(
+            codigo = f.optString("codigo"),
+            numeroProtocolo = f.optString("numeroProtocolo"),
+            solicitante = f.optString("solicitante").ifBlank { null },
+            unidadeRequisitante = f.optString("unidadeRequisitante").ifBlank { null },
+            vitima = f.optString("vitima").ifBlank { null },
+            dataOcorrencia = f.optString("dataOcorrencia").ifBlank { null },
+            quantidadeMateriais = f.optInt("quantidadeMateriais"),
+            naturezas = (0 until (naturezas?.length() ?: 0)).map { naturezas!!.optString(it) },
+            materiais = (0 until (materiais?.length() ?: 0)).map { i ->
+                val m = materiais!!.getJSONObject(i)
+                val lacre = m.optString("lacreEntrada").ifBlank { null }
+                m.optString("descricao") + (lacre?.let { " — lacre $it" } ?: "")
+            },
+        )
     }
 
     /** Um trecho do laudo, com a origem (atena | perito | ia) para a etiqueta. */

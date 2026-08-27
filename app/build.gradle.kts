@@ -39,6 +39,8 @@ android {
         buildConfigField("String", "PV_MATRICULA", segredo("pv.matricula"))
         buildConfigField("String", "PV_SENHA", segredo("pv.senha"))
         buildConfigField("String", "PV_PROTOCOLO", segredo("pv.protocolo"))
+        // Assistente IA de bancada (ponte Gemini Live). Vazio = recurso oculto.
+        buildConfigField("String", "PV_PONTE_URL", segredo("pv.ponte"))
     }
 
     buildTypes {

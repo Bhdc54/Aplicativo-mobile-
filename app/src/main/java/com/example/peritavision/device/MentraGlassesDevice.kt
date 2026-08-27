@@ -363,6 +363,45 @@ class MentraGlassesDevice(
     // Interface GlassesDevice
     // ------------------------------------------------------------------------
 
+    /**
+     * Foto com autorização JÁ EMITIDA (usada na LEITURA DE LACRE, pré-sessão:
+     * o webhook aponta para /webhooks/lacre/:id, não para a captura de
+     * evidência). Não passa pelo obterAutorizacao nem entra na custódia.
+     */
+    fun capturarFotoComAutorizacao(autorizacao: AutorizacaoCaptura) {
+        if (!conectado) {
+            _eventos.tryEmit(GlassesEvent.Erro("óculos não conectado — toque em CONECTAR ÓCULOS"))
+            return
+        }
+        if (streamAtivo) {
+            _eventos.tryEmit(GlassesEvent.Erro("leia o lacre antes de iniciar o vídeo da sessão"))
+            return
+        }
+        scope.launch {
+            try {
+                sdk.requestPhoto(
+                    PhotoRequest(
+                        requestId = autorizacao.requestId,
+                        size = PhotoSize.MEDIUM,
+                        webhookUrl = autorizacao.webhookUrl,
+                        authToken = autorizacao.authToken,
+                        compress = PhotoCompression.MEDIUM,
+                        sound = true,
+                        exposureTimeNs = null,
+                        iso = null,
+                    )
+                )
+                if (!wifiConectado) {
+                    _eventos.tryEmit(
+                        GlassesEvent.Erro("Foto do lacre disparada, mas os óculos estão SEM Wi-Fi — configure o Wi-Fi.")
+                    )
+                }
+            } catch (e: Exception) {
+                _eventos.tryEmit(GlassesEvent.Erro("falha ao fotografar o lacre: ${e.message}"))
+            }
+        }
+    }
+
     override fun capturarFoto() {
         if (!conectado) {
             _eventos.tryEmit(GlassesEvent.Erro("óculos não conectado — toque em CONECTAR ÓCULOS"))

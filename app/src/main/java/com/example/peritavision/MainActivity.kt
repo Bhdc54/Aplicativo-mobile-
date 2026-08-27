@@ -238,8 +238,15 @@ fun CaptureScreen() {
         }
         val ponte = PonteGemini(BuildConfig.PV_PONTE_URL, sessaoId ?: "bancada-teste")
         ponte.onStatus = { msg -> status = msg }
-        ponte.onTranscricao = { t -> iaPerito = t }
-        ponte.onResposta = { t -> iaResposta = t }
+        // As transcrições chegam em PEDAÇOS (streaming): acumula em vez de
+        // substituir — antes cada pedacinho apagava o anterior e o texto
+        // "passava correndo" na tela. Fala nova do perito (primeiro pedaço
+        // depois de uma resposta) limpa o par e começa o turno seguinte.
+        ponte.onTranscricao = { t ->
+            if (iaResposta.isNotBlank()) { iaPerito = ""; iaResposta = "" }
+            iaPerito += t
+        }
+        ponte.onResposta = { t -> iaResposta += t }
         ponte.conectar()
         ponteGemini = ponte
         status = "Assistente IA conectando..."
@@ -307,6 +314,48 @@ fun CaptureScreen() {
     // servidor decodifica e consulta o Atena; a ficha do caso aparece na tela.
     var fichaLacre by remember { mutableStateOf<BackendClient.FichaLacre?>(null) }
     var lendoLacre by remember { mutableStateOf(false) }
+    /** O que o Atena devolveu ao abrir a sessão — vira contexto do assistente IA. */
+    var casoAtena by remember { mutableStateOf<BackendClient.CasoAtena?>(null) }
+    LaunchedEffect(sessaoId) { if (sessaoId == null) casoAtena = null }
+
+    // ── O assistente IA "vê" e "conhece o caso" ─────────────────────────────
+    // Sempre que a ponte (re)abrir ou o vídeo/ficha mudarem, manda ao servidor
+    // da IA: a URL do FLV dos óculos (o servidor puxa ~1 quadro/s dela e o
+    // Gemini passa a ver a bancada) e a ficha do lacre como contexto textual
+    // (para responder "qual o nome do solicitante?" sem inventar).
+    LaunchedEffect(ponteGemini, urlVisao) {
+        ponteGemini?.definirVideo(urlVisao)
+    }
+    LaunchedEffect(ponteGemini, fichaLacre, casoAtena, protocolo) {
+        if (ponteGemini == null) return@LaunchedEffect
+        val f = fichaLacre
+        val a = casoAtena
+        val texto = buildString {
+            append("CONTEXTO DO CASO (registre e responda apenas \"Contexto do caso recebido.\"): ")
+            append("protocolo ${protocolo.trim().ifBlank { "não informado" }}.")
+            // Dados do Atena resolvidos na abertura da sessão — cobrem o caso
+            // aberto por protocolo digitado, sem passar pela leitura do lacre.
+            if (a != null) {
+                a.autoridade?.let { append(" Autoridade/solicitante: $it.") }
+                a.prioridade?.let { append(" Prioridade: $it.") }
+                a.prazoHoras?.let { append(" Prazo: $it horas.") }
+                if (a.naturezas.isNotEmpty()) append(" Naturezas: ${a.naturezas.joinToString(", ")}.")
+                if (a.materiais.isNotEmpty()) append(" Materiais do caso: ${a.materiais.joinToString("; ")}.")
+                if (a.exames.isNotEmpty()) append(" Exames complementares: ${a.exames.joinToString("; ")}.")
+            }
+            if (f != null) {
+                append(" Lacre lido: ${f.codigo}.")
+                f.solicitante?.let { append(" Solicitante (ficha do lacre): $it.") }
+                f.unidadeRequisitante?.let { append(" Unidade requisitante: $it.") }
+                f.vitima?.let { append(" Vítima: $it.") }
+                f.dataOcorrencia?.let { append(" Data da ocorrência: $it.") }
+                append(" Quantidade de materiais: ${f.quantidadeMateriais}.")
+                if (f.materiais.isNotEmpty()) append(" Materiais (ficha): ${f.materiais.joinToString("; ")}.")
+                if (f.naturezas.isNotEmpty()) append(" Naturezas (ficha): ${f.naturezas.joinToString(", ")}.")
+            }
+        }
+        ponteGemini?.definirContexto(texto)
+    }
     fun lerLacrePelosOculos() {
         val mentra = device as? MentraGlassesDevice
         if (mentra == null || !conectado) {
@@ -358,10 +407,11 @@ fun CaptureScreen() {
                 status = "Entrando no backend..."
                 backend.login(matricula.trim(), senhaPerito.trim())
                 status = "Resolvendo protocolo ${protocolo.trim()}..."
-                val casoId = backend.resolverProtocolo(protocolo.trim())
+                val caso = backend.resolverProtocolo(protocolo.trim())
+                casoAtena = caso
                 val perfilId = backend.primeiroPerfil()
                 status = "Abrindo sessão..."
-                val aberta = backend.abrirSessao(casoId, perfilId)
+                val aberta = backend.abrirSessao(caso.id, perfilId)
                 sessaoId = aberta.sessaoId
                 rtmpUrl = aberta.rtmpUrl
                 vozFeedback.falar("Sessão iniciada. Pode capturar.")
