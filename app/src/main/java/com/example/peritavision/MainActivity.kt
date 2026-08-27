@@ -317,6 +317,15 @@ fun CaptureScreen() {
     /** O que o Atena devolveu ao abrir a sessão — vira contexto do assistente IA. */
     var casoAtena by remember { mutableStateOf<BackendClient.CasoAtena?>(null) }
     LaunchedEffect(sessaoId) { if (sessaoId == null) casoAtena = null }
+    /** Texto extraído do PDF da requisição — o que a autoridade pediu. */
+    var textoRequisicao by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(casoAtena) {
+        textoRequisicao = null
+        val docId = casoAtena?.documentoId ?: return@LaunchedEffect
+        // Falha aqui não pode travar nada: sem o texto, o assistente segue
+        // com o resto do contexto normalmente.
+        textoRequisicao = runCatching { backend.textoDocumento(docId) }.getOrNull()
+    }
 
     // ── O assistente IA "vê" e "conhece o caso" ─────────────────────────────
     // Sempre que a ponte (re)abrir ou o vídeo/ficha mudarem, manda ao servidor
@@ -326,7 +335,7 @@ fun CaptureScreen() {
     LaunchedEffect(ponteGemini, urlVisao) {
         ponteGemini?.definirVideo(urlVisao)
     }
-    LaunchedEffect(ponteGemini, fichaLacre, casoAtena, protocolo) {
+    LaunchedEffect(ponteGemini, fichaLacre, casoAtena, textoRequisicao, protocolo) {
         if (ponteGemini == null) return@LaunchedEffect
         val f = fichaLacre
         val a = casoAtena
@@ -336,12 +345,22 @@ fun CaptureScreen() {
             // Dados do Atena resolvidos na abertura da sessão — cobrem o caso
             // aberto por protocolo digitado, sem passar pela leitura do lacre.
             if (a != null) {
-                a.autoridade?.let { append(" Autoridade/solicitante: $it.") }
+                a.autoridade?.let { append(" Nome do solicitante: $it.") }
+                a.unidadeRequisitante?.let { append(" Unidade requisitante: $it.") }
+                a.dataOcorrencia?.let { append(" Data da ocorrência/fato: $it.") }
+                a.statusProtocolo?.let { append(" Status do protocolo: $it.") }
+                a.areaAtuacao?.let { append(" Área de atuação: $it.") }
+                if (a.envolvidos.isNotEmpty()) append(" Pessoa(s) envolvida(s): ${a.envolvidos.joinToString("; ")}.")
+                a.documentoPrincipal?.let { append(" Documento principal: $it.") }
                 a.prioridade?.let { append(" Prioridade: $it.") }
                 a.prazoHoras?.let { append(" Prazo: $it horas.") }
-                if (a.naturezas.isNotEmpty()) append(" Naturezas: ${a.naturezas.joinToString(", ")}.")
+                if (a.naturezas.isNotEmpty()) append(" Natureza do exame: ${a.naturezas.joinToString(", ")}.")
                 if (a.materiais.isNotEmpty()) append(" Materiais do caso: ${a.materiais.joinToString("; ")}.")
                 if (a.exames.isNotEmpty()) append(" Exames complementares: ${a.exames.joinToString("; ")}.")
+            }
+            textoRequisicao?.let {
+                append(" CONTEÚDO DO DOCUMENTO PRINCIPAL (requisição anexada no Atena, texto integral extraído do PDF): ")
+                append(it)
             }
             if (f != null) {
                 append(" Lacre lido: ${f.codigo}.")

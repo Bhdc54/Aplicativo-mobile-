@@ -51,6 +51,15 @@ class BackendClient(var baseUrl: String) {
         val autoridade: String?,
         val materiais: List<String>,
         val exames: List<String>,
+        val unidadeRequisitante: String?,
+        val dataOcorrencia: String?,
+        val statusProtocolo: String?,
+        val areaAtuacao: String?,
+        /** "nome (papel)" por envolvido — ex.: "Franciane de Jesus Alves (envolvida)". */
+        val envolvidos: List<String>,
+        val documentoPrincipal: String?,
+        /** Id para textoDocumento() — o conteúdo da requisição anexada. */
+        val documentoId: String?,
     )
 
     /** Resolve o protocolo (numero do caso) e devolve o caso completo do Atena. */
@@ -83,7 +92,34 @@ class BackendClient(var baseUrl: String) {
             autoridade = r.optString("autoridade").takeIf { it.isNotBlank() },
             materiais = lista("materiais"),
             exames = lista("exames"),
+            unidadeRequisitante = r.optString("unidadeRequisitante").takeIf { it.isNotBlank() },
+            dataOcorrencia = r.optString("dataOcorrencia").takeIf { it.isNotBlank() },
+            statusProtocolo = r.optString("statusProtocolo").takeIf { it.isNotBlank() },
+            areaAtuacao = r.optString("areaAtuacao").takeIf { it.isNotBlank() },
+            envolvidos = r.optJSONArray("envolvidos")?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    val p = a.optJSONObject(i) ?: return@mapNotNull null
+                    val nome = p.optString("nome").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val papel = p.optString("papel").takeIf { it.isNotBlank() }
+                    if (papel != null) "$nome ($papel)" else nome
+                }
+            } ?: emptyList(),
+            documentoPrincipal = r.optJSONObject("documentoPrincipal")?.let { d ->
+                buildString {
+                    d.optString("tipo").takeIf { it.isNotBlank() }?.let { append(it).append(" ") }
+                    d.optString("numero").takeIf { it.isNotBlank() }?.let { append("nº ").append(it) }
+                    d.optString("data").takeIf { it.isNotBlank() }?.let { append(" de ").append(it) }
+                }.trim().ifBlank { null }
+            },
+            documentoId = r.optString("documentoId").takeIf { it.isNotBlank() },
         )
+    }
+
+    /** Texto extraído do PDF da requisição (documento principal do Atena);
+     *  null quando o documento não tem texto extraível (ex.: digitalizado). */
+    suspend fun textoDocumento(documentoId: String): String? {
+        val r = getJson("/v1/casos/documento/$documentoId/texto")
+        return r.optString("texto").takeIf { it.isNotBlank() }
     }
 
     /** Pega o primeiro perfil disponivel (MVP: so existe um). */
