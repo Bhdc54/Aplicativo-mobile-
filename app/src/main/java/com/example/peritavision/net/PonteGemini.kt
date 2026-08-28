@@ -51,6 +51,9 @@ class PonteGemini(
     /** Chamado quando o servidor confirma que o vídeo dos óculos chegou ao
      *  Gemini — só então o assistente realmente ENXERGA a bancada. */
     var onVideoAtivo: () -> Unit = {}
+    /** O Gemini pediu uma função de bancada (capturar_foto, finalizar_sessao).
+     *  Quem executa é o app; responda com responderComando(id, nome, ...). */
+    var onComando: (id: String, nome: String) -> Unit = { _, _ -> }
 
     @Volatile private var pronto = false
     /** true depois de encerrar(): a reconexão automática para de tentar. */
@@ -112,6 +115,7 @@ class PonteGemini(
                     "transcricaoEntrada" -> onTranscricao(msg.optString("texto"))
                     "textoResposta" -> onResposta(msg.optString("texto"))
                     "videoAtivo" -> onVideoAtivo()
+                    "comando" -> onComando(msg.optString("id"), msg.optString("nome"))
                     "erro" -> onStatus("Assistente IA: ${msg.optString("mensagem")}")
                 }
             }
@@ -163,6 +167,17 @@ class PonteGemini(
     fun definirContexto(texto: String?) {
         contextoCaso = texto
         if (pronto && texto != null) enviarJson("contexto", "texto", texto)
+    }
+
+    /** Resultado de uma função de bancada — o Gemini espera isto para
+     *  confirmar por voz ("capturado"). */
+    fun responderComando(id: String, nome: String, ok: Boolean, detalhe: String) {
+        runCatching {
+            ws?.send(
+                JSONObject().put("tipo", "comandoResultado").put("id", id)
+                    .put("nome", nome).put("ok", ok).put("detalhe", detalhe).toString(),
+            )
+        }
     }
 
     /** Cópia do PCM16/16kHz dos óculos. Barato: se a ponte não está pronta, ignora. */

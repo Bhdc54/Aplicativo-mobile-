@@ -619,6 +619,34 @@ fun CaptureScreen() {
      * ÁUDIO DOS ÓCULOS → BACKEND → COMANDO.
      * Este é o caminho oficial da arquitetura. Os óculos entregam PCM por
      */
+    // ── Funções de bancada pedidas pelo assistente IA ──────────────────────
+    // O Gemini NÃO executa nada: ele pede, o app executa (o MESMO código dos
+    // comandos de voz offline — mesma captura selada, mesma cadeia de
+    // custódia) e devolve o resultado, que o assistente confirma por voz.
+    // Fica aqui (e não em ligarAssistenteIa) porque finalizarSessao é
+    // declarada acima e função local não enxerga declaração abaixo dela.
+    LaunchedEffect(ponteGemini) {
+        ponteGemini?.onComando = { id, nome ->
+            when (nome) {
+                "capturar_foto" -> {
+                    // (mesma checagem do botão: sessão aberta — o comando de
+                    // voz offline também dispara direto e o device trata o resto)
+                    if (sessaoId != null) {
+                        device.capturarFoto()
+                        ponteGemini?.responderComando(id, nome, true, "captura solicitada aos óculos")
+                    } else {
+                        ponteGemini?.responderComando(id, nome, false, "captura indisponível (óculos ou sessão não prontos)")
+                    }
+                }
+                "finalizar_sessao" -> {
+                    finalizarSessao()
+                    ponteGemini?.responderComando(id, nome, true, "sessão sendo finalizada; laudo entrará em processamento")
+                }
+                else -> ponteGemini?.responderComando(id, nome, false, "função desconhecida")
+            }
+        }
+    }
+
     // Liga o vídeo dos óculos assim que a sessão abre e os óculos estão prontos.
     LaunchedEffect(sessaoId, conectado, rtmpUrl) {
         val url = rtmpUrl
