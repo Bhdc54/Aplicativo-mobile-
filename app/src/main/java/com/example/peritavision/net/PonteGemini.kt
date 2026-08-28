@@ -48,6 +48,9 @@ class PonteGemini(
     var onTranscricao: (String) -> Unit = {}
     var onResposta: (String) -> Unit = {}
     var onStatus: (String) -> Unit = {}
+    /** Chamado quando o servidor confirma que o vídeo dos óculos chegou ao
+     *  Gemini — só então o assistente realmente ENXERGA a bancada. */
+    var onVideoAtivo: () -> Unit = {}
 
     @Volatile private var pronto = false
     /** true depois de encerrar(): a reconexão automática para de tentar. */
@@ -108,6 +111,7 @@ class PonteGemini(
                     }
                     "transcricaoEntrada" -> onTranscricao(msg.optString("texto"))
                     "textoResposta" -> onResposta(msg.optString("texto"))
+                    "videoAtivo" -> onVideoAtivo()
                     "erro" -> onStatus("Assistente IA: ${msg.optString("mensagem")}")
                 }
             }

@@ -207,6 +207,11 @@ fun CaptureScreen() {
     var ponteGemini by remember { mutableStateOf<PonteGemini?>(null) }
     var iaPerito by remember { mutableStateOf("") }
     var iaResposta by remember { mutableStateOf("") }
+    /** true quando o servidor confirma que o vídeo dos óculos chegou ao
+     *  Gemini. Sem isso o assistente responde "no escuro" — e já chamou um
+     *  celular de peça íntima. O cartão mostra isso para o perito saber se
+     *  pode confiar no que ele diz estar vendo. */
+    var iaEnxergando by remember { mutableStateOf(false) }
 
     /** UMA voz só na bancada: com o assistente IA ativo, quem fala é o Gemini
      *  (inclusive "Capturando" e o anúncio de sessão — instruído no servidor
@@ -252,11 +257,13 @@ fun CaptureScreen() {
         // substituir — antes cada pedacinho apagava o anterior e o texto
         // "passava correndo" na tela. Fala nova do perito (primeiro pedaço
         // depois de uma resposta) limpa o par e começa o turno seguinte.
+        ponte.onVideoAtivo = { iaEnxergando = true }
         ponte.onTranscricao = { t ->
             if (iaResposta.isNotBlank()) { iaPerito = ""; iaResposta = "" }
             iaPerito += t
         }
         ponte.onResposta = { t -> iaResposta += t }
+        iaEnxergando = false
         ponte.conectar()
         ponteGemini = ponte
         status = "Assistente IA conectando..."
@@ -266,6 +273,7 @@ fun CaptureScreen() {
         if (ativa != null) {
             ativa.encerrar()
             ponteGemini = null
+            iaEnxergando = false
             status = "Assistente IA desligado."
             return
         }
@@ -283,6 +291,7 @@ fun CaptureScreen() {
             ponteGemini = null
             iaPerito = ""
             iaResposta = ""
+            iaEnxergando = false
         }
     }
 
@@ -415,7 +424,7 @@ fun CaptureScreen() {
                 } else {
                     fichaLacre = ficha
                     protocolo = ficha!!.numeroProtocolo
-                    vozFeedback.falar("Lacre lido. Protocolo ${ficha!!.numeroProtocolo}.")
+                    falarSeSemIa("Lacre lido. Protocolo ${ficha!!.numeroProtocolo}.")
                     status = "Lacre ${ficha!!.codigo} → protocolo ${ficha!!.numeroProtocolo}"
                 }
             } catch (e: Exception) {
@@ -559,7 +568,7 @@ fun CaptureScreen() {
                             status = "Foto $fotosEnviadas enviada ao backend ✓"
                         } catch (e: Exception) {
                             status = "Falha ao enviar ao backend: ${e.message}"
-                            vozFeedback.falar("Falha ao enviar ao servidor")
+                            falarSeSemIa("Falha ao enviar ao servidor")
                         }
                     }
                 }
@@ -875,6 +884,7 @@ fun CaptureScreen() {
     val cartaoAssistente: @Composable () -> Unit = {
         if (ehMentra) CartaoAssistenteIa(
             ativo = ponteGemini != null,
+            enxergando = iaEnxergando,
             perito = iaPerito,
             resposta = iaResposta,
             onAlternar = { alternarAssistenteIa() },
@@ -1433,6 +1443,7 @@ private fun CartaoFichaLacre(
 @Composable
 private fun CartaoAssistenteIa(
     ativo: Boolean,
+    enxergando: Boolean,
     perito: String,
     resposta: String,
     onAlternar: () -> Unit,
@@ -1440,8 +1451,8 @@ private fun CartaoAssistenteIa(
     CartaoPv {
         CabecalhoCartao(
             titulo = "Assistente IA (teste)",
-            etiqueta = if (ativo) "ativo" else "desligado",
-            tomEtiqueta = if (ativo) Tom.OK else Tom.NEUTRO,
+            etiqueta = if (!ativo) "desligado" else if (enxergando) "vendo" else "sem imagem",
+            tomEtiqueta = if (!ativo) Tom.NEUTRO else if (enxergando) Tom.OK else Tom.ATENCAO,
         )
         if (!ativo) {
             TextoApoio(
@@ -1454,6 +1465,13 @@ private fun CartaoAssistenteIa(
             return@CartaoPv
         }
         Spacer(Modifier.height(8.dp))
+        if (!enxergando) {
+            TextoApoio(
+                "Sem imagem dos óculos: o assistente ouve, mas NÃO está vendo a bancada — " +
+                    "não confie no que ele disser sobre o material.",
+            )
+            Spacer(Modifier.height(8.dp))
+        }
         if (perito.isNotBlank()) {
             Text(
                 "Você: $perito",
