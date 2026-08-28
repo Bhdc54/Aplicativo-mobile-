@@ -307,11 +307,13 @@ fun CaptureScreen() {
     var videoLigado by remember { mutableStateOf(false) }
 
     // "Visão dos óculos": o mesmo stream RTMP que os óculos mandam ao backend,
-    // devolvido como HTTP-FLV pelo node-media-server (porta RTMP_HTTP_PORT=8001
-    // no .env do backend). rtmp://host:1935/live/ID → http://host:8001/live/ID.flv
+    // devolvido como HTTP-FLV pelo node-media-server. Porta 8100 porque no
+    // servidor de produção a 8001 já estava ocupada por outro serviço —
+    // RTMP_HTTP_PORT=8100 no Coolify tem que estar igual a esta constante.
+    // rtmp://host:1935/pv/ID → http://host:8100/pv/ID.flv
     val urlVisao = rtmpUrl?.let { r ->
         Regex("^rtmp://([^:/]+)(?::\\d+)?/(.+)$").find(r)?.let { m ->
-            "http://${m.groupValues[1]}:8001/${m.groupValues[2]}.flv"
+            "http://${m.groupValues[1]}:8100/${m.groupValues[2]}.flv"
         }
     }
 
