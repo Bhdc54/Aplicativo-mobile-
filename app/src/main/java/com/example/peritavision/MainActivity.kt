@@ -712,8 +712,16 @@ fun CaptureScreen() {
         // Cada frame do microfone dos óculos segue direto para o servidor.
         // Caminho oficial (offline) + cópia opcional para o assistente IA.
         mentra.onPcm = { pcm, _ ->
-            streamer.enviarPcm(pcm)
-            ponteGemini?.enviarPcm(pcm)
+            // Meia-duplex: enquanto o assistente fala pelo alto-falante dos
+            // óculos, o microfone capta a própria voz da IA. Sem este bloqueio,
+            // a IA se ouve (fala sem parar) e um "fotografe" dito por ela
+            // dispara o comando de captura no Vosk. Silenciamos os DOIS
+            // caminhos (offline e IA) durante a fala + cauda de 400 ms.
+            val iaFalando = ponteGemini?.estaFalando() == true
+            if (!iaFalando) {
+                streamer.enviarPcm(pcm)
+                ponteGemini?.enviarPcm(pcm)
+            }
         }
     }
 
@@ -1357,6 +1365,10 @@ private fun CartaoVisaoOculos(urlFlv: String?, aoVivo: Boolean) {
         val player = remember(urlFlv) {
             androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
                 setMediaItem(androidx.media3.common.MediaItem.fromUri(urlFlv))
+                // O monitor é só visual: com o áudio ligado, o tablet toca a
+                // voz do perito de volta (eco) e alimenta o loop em que a IA
+                // se ouve. Vídeo segue normal; áudio fica mudo.
+                volume = 0f
                 prepare()
                 playWhenReady = true
             }

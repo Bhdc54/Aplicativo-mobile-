@@ -58,6 +58,12 @@ class PonteGemini(
     @Volatile private var pronto = false
     /** true depois de encerrar(): a reconexão automática para de tentar. */
     @Volatile private var encerrado = false
+    /** Até quando a voz do assistente está tocando no alto-falante (ms epoch).
+     *  Base do HALF-DUPLEX anti-eco: enquanto ele fala, o microfone fica
+     *  surdo — sem isto a voz dele voltava pelo mic dos óculos, ele se ouvia
+     *  e não parava de falar; e o "fotografe" falado por ele disparava o
+     *  comando de captura offline. */
+    @Volatile private var falandoAteMs = 0L
     /** Guardados até o "pronto" (e reenviados após reconexão automática). */
     @Volatile private var urlVideo: String? = null
     @Volatile private var contextoCaso: String? = null
@@ -125,6 +131,16 @@ class PonteGemini(
                 // thread do OkHttp, não na UI.
                 if (bytes.size > 1 && bytes[0] == 0x03.toByte()) {
                     val pcm = bytes.substring(1).toByteArray()
+                    // Estende a janela de "estou falando" pela duração deste
+                    // trecho (PCM16 mono 24 kHz → bytes/2/24000 segundos),
+                    // com uma cauda de 400 ms para o som acabar de sair.
+                    val duracaoMs = (pcm.size / 2L) * 1000L / 24_000L
+                    val agora = System.currentTimeMillis()
+                    // Empilha só a duração real do trecho: a cauda de 400 ms
+                    // é aplicada UMA vez em estaFalando(). Somar 400 ms por
+                    // pacote deixava o microfone mudo por dezenas de segundos
+                    // depois da fala — e as perguntas do perito se perdiam.
+                    falandoAteMs = maxOf(falandoAteMs, agora) + duracaoMs
                     runCatching { track.write(pcm, 0, pcm.size) }
                 }
             }
@@ -189,9 +205,13 @@ class PonteGemini(
         }
     }
 
-    /** Cópia do PCM16/16kHz dos óculos. Barato: se a ponte não está pronta, ignora. */
+    /** true enquanto a voz do assistente ainda está saindo no alto-falante. */
+    fun estaFalando(): Boolean = System.currentTimeMillis() < falandoAteMs + 400L
+
+    /** Cópia do PCM16/16kHz dos óculos. Barato: se a ponte não está pronta, ignora.
+     *  HALF-DUPLEX: enquanto o assistente fala, o mic não sobe — ele não se ouve. */
     fun enviarPcm(pcm: ByteArray) {
-        if (!pronto) return
+        if (!pronto || estaFalando()) return
         val quadro = ByteArray(pcm.size + 1)
         quadro[0] = 0x01
         System.arraycopy(pcm, 0, quadro, 1, pcm.size)
