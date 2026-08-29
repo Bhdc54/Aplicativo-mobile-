@@ -72,11 +72,13 @@ class PonteGemini(
     private val principal = Handler(Looper.getMainLooper())
 
     /** Toca PCM16 mono 24 kHz conforme chega — sem esperar a resposta inteira. */
-    private val track: AudioTrack by lazy {
+    @Volatile private var track: AudioTrack? = null
+
+    private fun criarTrack(): AudioTrack {
         val minimo = AudioTrack.getMinBufferSize(
             24_000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
         )
-        AudioTrack.Builder()
+        return AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ASSISTANT)
@@ -94,6 +96,21 @@ class PonteGemini(
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
             .also { it.play() }
+    }
+
+    /** Escreve no AudioTrack e RESSUSCITA a saída quando a rota Bluetooth
+     *  pisca: nesse caso o track morre (ERROR_DEAD_OBJECT) e todo write
+     *  seguinte falha em silêncio — era por isso que, depois de 3-4 falas,
+     *  a voz sumia dos óculos e só o texto continuava. */
+    private fun tocar(pcm: ByteArray) {
+        var t = track ?: runCatching { criarTrack() }.getOrNull()?.also { track = it } ?: return
+        val r = runCatching { t.write(pcm, 0, pcm.size) }.getOrDefault(AudioTrack.ERROR_DEAD_OBJECT)
+        if (r < 0) {
+            Log.w(TAG, "AudioTrack morto (código $r) — recriando a saída de voz")
+            runCatching { t.release() }
+            t = runCatching { criarTrack() }.getOrNull()?.also { track = it } ?: return
+            runCatching { t.write(pcm, 0, pcm.size) }
+        }
     }
 
     fun conectar() {
@@ -141,7 +158,7 @@ class PonteGemini(
                     // pacote deixava o microfone mudo por dezenas de segundos
                     // depois da fala — e as perguntas do perito se perdiam.
                     falandoAteMs = maxOf(falandoAteMs, agora) + duracaoMs
-                    runCatching { track.write(pcm, 0, pcm.size) }
+                    tocar(pcm)
                 }
             }
 
@@ -223,7 +240,7 @@ class PonteGemini(
         pronto = false
         principal.removeCallbacksAndMessages(null)
         runCatching { ws?.close(1000, "encerrado pelo app") }
-        runCatching { track.stop(); track.release() }
+        runCatching { track?.stop(); track?.release() }
     }
 
     companion object { private const val TAG = "PonteGemini" }
