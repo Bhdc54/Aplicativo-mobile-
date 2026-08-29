@@ -206,6 +206,11 @@ fun CaptureScreen() {
     // ponteGemini — função/variável local só é visível abaixo da declaração.)
     var ponteGemini by remember { mutableStateOf<PonteGemini?>(null) }
     var iaPerito by remember { mutableStateOf("") }
+    /** Quando a última captura foi disparada (qualquer via). Trava a FOTO EM
+     *  DOBRO: a frase "assistente, capture uma foto disso" contém a palavra
+     *  "capturar", então o comando offline dispara E o Gemini chama a função
+     *  capturar_foto — sem esta trava saíam duas fotos da mesma cena. */
+    var ultimaCapturaMs by remember { mutableStateOf(0L) }
     var iaResposta by remember { mutableStateOf("") }
     /** true quando o servidor confirma que o vídeo dos óculos chegou ao
      *  Gemini. Sem isso o assistente responde "no escuro" — e já chamou um
@@ -225,7 +230,10 @@ fun CaptureScreen() {
     // Declarado ANTES do coletor de eventos porque ele precisa acionar a voz
     // (uma funcao/variavel local so e visivel abaixo de onde foi declarada).
     val voz = remember {
-        VoiceTrigger(context, onComando = { falarSeSemIa("Capturando"); device.capturarFoto() })
+        VoiceTrigger(context, onComando = {
+            ultimaCapturaMs = System.currentTimeMillis()
+            falarSeSemIa("Capturando"); device.capturarFoto()
+        })
     }
     var vozAtiva by remember { mutableStateOf(false) }
     /** true depois que os oculos falharem em transcrever: escuta pelo celular. */
@@ -355,6 +363,14 @@ fun CaptureScreen() {
     // (para responder "qual o nome do solicitante?" sem inventar).
     LaunchedEffect(ponteGemini, urlVisao) {
         ponteGemini?.definirVideo(urlVisao)
+        // Cinto de segurança: enquanto o assistente não confirmar que está
+        // ENXERGANDO, reenvia a URL do vídeo a cada 20 s. Cobre mensagem
+        // perdida na reconexão e corrida entre a sessão Gemini abrir e o
+        // pedido de vídeo chegar.
+        while (ponteGemini != null && urlVisao != null && !iaEnxergando) {
+            kotlinx.coroutines.delay(20_000)
+            if (!iaEnxergando) ponteGemini?.definirVideo(urlVisao)
+        }
     }
     LaunchedEffect(ponteGemini, fichaLacre, casoAtena, textoRequisicao, protocolo) {
         if (ponteGemini == null) return@LaunchedEffect
@@ -631,13 +647,20 @@ fun CaptureScreen() {
         ponteGemini?.onComando = { id, nome ->
             when (nome) {
                 "capturar_foto" -> {
-                    // (mesma checagem do botão: sessão aberta — o comando de
-                    // voz offline também dispara direto e o device trata o resto)
-                    if (sessaoId != null) {
-                        device.capturarFoto()
-                        ponteGemini?.responderComando(id, nome, true, "captura solicitada aos óculos")
-                    } else {
-                        ponteGemini?.responderComando(id, nome, false, "captura indisponível (óculos ou sessão não prontos)")
+                    val agora = System.currentTimeMillis()
+                    when {
+                        sessaoId == null ->
+                            ponteGemini?.responderComando(id, nome, false, "captura indisponível (sessão não aberta)")
+                        // O comando offline acabou de fotografar a mesma cena
+                        // (a frase do perito continha "capturar"/"foto"):
+                        // confirma sem duplicar a evidência.
+                        agora - ultimaCapturaMs < 6_000 ->
+                            ponteGemini?.responderComando(id, nome, true, "a foto já foi capturada agora mesmo pelo comando de voz; não repita")
+                        else -> {
+                            ultimaCapturaMs = agora
+                            device.capturarFoto()
+                            ponteGemini?.responderComando(id, nome, true, "captura solicitada aos óculos")
+                        }
                     }
                 }
                 "finalizar_sessao" -> {
@@ -675,7 +698,10 @@ fun CaptureScreen() {
             onComando = { intencao, ouvido ->
                 status = "Comando \"$ouvido\" → $intencao"
                 when (intencao) {
-                    "CAPTURAR" -> { falarSeSemIa("Capturando"); device.capturarFoto() }
+                    "CAPTURAR" -> {
+                        ultimaCapturaMs = System.currentTimeMillis()
+                        falarSeSemIa("Capturando"); device.capturarFoto()
+                    }
                     "FINALIZAR" -> finalizarSessao()
                     // MARCAR e DESCARTAR entram junto com a narração do laudo.
                 }

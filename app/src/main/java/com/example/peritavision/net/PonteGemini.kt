@@ -146,7 +146,16 @@ class PonteGemini(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 pronto = false
-                onStatus("Assistente IA encerrado.")
+                // Fechamento LIMPO também reconecta: um redeploy da ponte no
+                // servidor encerra a conexão educadamente (não é "falha"), e
+                // sem isto o assistente ficava morto até religar na mão.
+                // Só o encerrar() explícito (fim de sessão) para de tentar.
+                if (!encerrado) {
+                    onStatus("Assistente IA: servidor reiniciou — reconectando...")
+                    principal.postDelayed({ if (!encerrado) conectar() }, 3_000)
+                } else {
+                    onStatus("Assistente IA encerrado.")
+                }
             }
         })
     }
