@@ -98,12 +98,44 @@ class PonteGemini(
             .also { it.play() }
     }
 
-    /** Escreve no AudioTrack e RESSUSCITA a saída quando a rota Bluetooth
-     *  pisca: nesse caso o track morre (ERROR_DEAD_OBJECT) e todo write
-     *  seguinte falha em silêncio — era por isso que, depois de 3-4 falas,
-     *  a voz sumia dos óculos e só o texto continuava. */
+    /** Marca de tempo do último trecho de voz recebido — serve para saber
+     *  onde uma fala termina e outra começa (silêncio > 1,2 s). */
+    @Volatile private var ultimoAudioMs = 0L
+
+    /** Escreve no AudioTrack mantendo a saída VIVA entre uma fala e outra.
+     *
+     *  Sintoma que isto resolve: depois de 3-4 respostas, a IA continuava
+     *  escrevendo no tablet mas não saía voz nenhuma nos óculos — justamente
+     *  quando o perito pergunta "o que eu tenho na mão", que é o uso real.
+     *
+     *  São TRÊS falhas diferentes, todas silenciosas, tratadas aqui:
+     *   1. O track morre quando a rota Bluetooth pisca (ERROR_DEAD_OBJECT):
+     *      todo write seguinte falha sem exceção. → recria e reescreve.
+     *   2. O track sai do estado PLAYING (pausado por foco de áudio, por uma
+     *      fala do TTS, pelo player do monitor): os writes ENTRAM no buffer e
+     *      não tocam nada. → confere playState e chama play() de novo.
+     *   3. A rota A2DP dos óculos entra em baixo consumo entre uma fala e
+     *      outra; o track continua "vivo e tocando", mas o som não chega ao
+     *      alto-falante. Não há erro nenhum para detectar. → a cada NOVA fala
+     *      (silêncio de mais de 1,2 s, quando o áudio anterior já escoou por
+     *      completo) a saída é recriada do zero, garantindo rota nova. */
     private fun tocar(pcm: ByteArray) {
+        val agora = System.currentTimeMillis()
+        val novaFala = agora - ultimoAudioMs > 1_200L
+        ultimoAudioMs = agora
+
+        if (novaFala) {
+            // Seguro: o intervalo garante que a fala anterior já terminou de
+            // sair, então nada é cortado ao trocar de track.
+            track?.let { antigo -> runCatching { antigo.stop(); antigo.release() } }
+            track = null
+        }
+
         var t = track ?: runCatching { criarTrack() }.getOrNull()?.also { track = it } ?: return
+        if (t.playState != AudioTrack.PLAYSTATE_PLAYING) {
+            Log.w(TAG, "AudioTrack não estava tocando (estado ${t.playState}) — religando")
+            runCatching { t.play() }
+        }
         val r = runCatching { t.write(pcm, 0, pcm.size) }.getOrDefault(AudioTrack.ERROR_DEAD_OBJECT)
         if (r < 0) {
             Log.w(TAG, "AudioTrack morto (código $r) — recriando a saída de voz")
