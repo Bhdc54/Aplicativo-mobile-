@@ -545,10 +545,14 @@ fun CaptureScreen() {
                 is GlassesEvent.Aviso -> status = evento.mensagem
                 is GlassesEvent.TranscricaoIndisponivel -> {
                     // Os oculos ouvem mas nao transcrevem: assume o microfone
-                    // do celular, sem o perito precisar fazer nada.
-                    usarVozDoCelular = true
-                    voz.iniciar()
-                    vozAtiva = true
+                    // do celular, sem o perito precisar fazer nada. Com o
+                    // assistente IA ligado nao ha o que assumir — quem entende
+                    // o pedido do perito e o Gemini, pelo audio dos oculos.
+                    if (ponteGemini == null) {
+                        usarVozDoCelular = true
+                        voz.iniciar()
+                        vozAtiva = true
+                    }
                 }
                 is GlassesEvent.CapturaRemota -> {
                     // Os oculos subiram o JPEG direto ao webhook; o backend selou.
@@ -595,8 +599,14 @@ fun CaptureScreen() {
     }
 
     // Comando de voz pelos MICROFONES DOS OCULOS (transcricao local, sem nuvem).
-    LaunchedEffect(device) {
-        (device as? MentraGlassesDevice)?.onComandoVoz = { device.capturarFoto() }
+    LaunchedEffect(device, ponteGemini) {
+        // Com o assistente IA ligado, QUEM manda é o Gemini (função
+        // capturar_foto). O reconhecedor de palavras soltas fica só como
+        // reserva para quando a IA está desligada — dois donos do mesmo
+        // comando tiravam foto em dobro e a IA disparava captura ao dizer
+        // "fotografe" no meio de uma frase.
+        (device as? MentraGlassesDevice)?.onComandoVoz =
+            if (ponteGemini != null) null else ({ device.capturarFoto() })
     }
 
     /**
@@ -620,9 +630,11 @@ fun CaptureScreen() {
      * Escuta CONTINUA enquanto a sessao estiver aberta.
      * O microfone fica ligado do inicio ao fim da sessao, mas o app so AGE ao
      */
-    LaunchedEffect(sessaoId, conectado, usarVozDoCelular) {
+    LaunchedEffect(sessaoId, conectado, usarVozDoCelular, ponteGemini) {
         val mentra = device as? MentraGlassesDevice
-        val deveEscutar = sessaoId != null && (mentra == null || conectado)
+        // Assistente IA ligado = reconhecedor offline DESLIGADO (ver acima).
+        val deveEscutar = sessaoId != null && ponteGemini == null &&
+            (mentra == null || conectado)
         val pelosOculos = mentra != null && !usarVozDoCelular
         if (deveEscutar && !vozAtiva) {
             if (pelosOculos) mentra.iniciarComandoDeVoz() else voz.iniciar()
@@ -696,14 +708,20 @@ fun CaptureScreen() {
         val streamer = AudioStreamer(enderecoBackend.trim(), jwt, id).apply {
             onStatus = { msg -> status = msg }
             onComando = { intencao, ouvido ->
-                status = "Comando \"$ouvido\" → $intencao"
-                when (intencao) {
-                    "CAPTURAR" -> {
-                        ultimaCapturaMs = System.currentTimeMillis()
-                        falarSeSemIa("Capturando"); device.capturarFoto()
+                // Terceiro caminho offline (ASR do backend). Mesma regra: com
+                // o assistente ligado, o dono do comando e o Gemini. O audio
+                // CONTINUA subindo ao backend (custodia da sessao) — so a acao
+                // automatica sobre ele e que fica suspensa.
+                if (ponteGemini == null) {
+                    status = "Comando \"$ouvido\" → $intencao"
+                    when (intencao) {
+                        "CAPTURAR" -> {
+                            ultimaCapturaMs = System.currentTimeMillis()
+                            falarSeSemIa("Capturando"); device.capturarFoto()
+                        }
+                        "FINALIZAR" -> finalizarSessao()
+                        // MARCAR e DESCARTAR entram junto com a narração do laudo.
                     }
-                    "FINALIZAR" -> finalizarSessao()
-                    // MARCAR e DESCARTAR entram junto com a narração do laudo.
                 }
             }
         }
@@ -911,6 +929,7 @@ fun CaptureScreen() {
             fotosEnviadas = fotosEnviadas,
             vozAtiva = vozAtiva,
             ouvindoPelosOculos = ouvindoPelosOculos,
+            assistenteIa = ponteGemini != null,
             gravandoAudio = gravandoAudio,
             previewCamera = previewCamera,
             onFoto = { device.capturarFoto() },
@@ -1273,6 +1292,10 @@ private fun CartaoCaptura(
     fotosEnviadas: Int,
     vozAtiva: Boolean,
     ouvindoPelosOculos: Boolean,
+    /** true quando o assistente IA está ligado: é ELE quem recebe os pedidos
+     *  do perito ("registra uma foto disso", "pode encerrar"), então some da
+     *  tela o reconhecedor de palavras soltas, que só existe como reserva. */
+    assistenteIa: Boolean,
     gravandoAudio: Boolean,
     previewCamera: (@Composable () -> Unit)?,
     onFoto: () -> Unit,
@@ -1292,7 +1315,14 @@ private fun CartaoCaptura(
         } else if (fotosEnviadas > 0) {
             Contador(fotosEnviadas, "fotos enviadas e seladas")
         } else {
-            TextoApoio("Toque no botão, use a haste dos óculos, ou fale \"capturar\".")
+            TextoApoio(
+                if (assistenteIa) {
+                    "Toque no botão, use a haste dos óculos, ou peça ao assistente " +
+                        "com suas palavras (\"registra uma foto disso\")."
+                } else {
+                    "Toque no botão, use a haste dos óculos, ou fale \"capturar\"."
+                },
+            )
         }
 
         if (previewCamera != null) {
@@ -1309,7 +1339,12 @@ private fun CartaoCaptura(
             onClick = onFoto,
         )
 
-        if (vozAtiva && podeCapturar) {
+        if (assistenteIa && podeCapturar) {
+            AvisoEscuta(
+                titulo = "Assistente ouvindo",
+                detalhe = "fale normalmente — ele captura e encerra a pedido",
+            )
+        } else if (vozAtiva && podeCapturar) {
             AvisoEscuta(
                 titulo = if (ouvindoPelosOculos) "Óculos ouvindo" else "Celular ouvindo",
                 detalhe = "diga \"capturar\" ou \"finalizar\"",
@@ -1318,14 +1353,18 @@ private fun CartaoCaptura(
 
         Spacer(Modifier.height(9.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            BotaoContorno(
-                texto = if (vozAtiva) "Parar voz" else "Comando de voz",
-                icone = R.drawable.ic_pv_mic,
-                habilitado = podeCapturar,
-                tom = if (vozAtiva) Tom.ERRO else Tom.NEUTRO,
-                modifier = Modifier.weight(1f),
-                onClick = onVoz,
-            )
+            // O botão de palavras soltas só aparece SEM assistente: com ele
+            // ligado, os dois disputavam o mesmo comando.
+            if (!assistenteIa) {
+                BotaoContorno(
+                    texto = if (vozAtiva) "Parar voz" else "Comando de voz",
+                    icone = R.drawable.ic_pv_mic,
+                    habilitado = podeCapturar,
+                    tom = if (vozAtiva) Tom.ERRO else Tom.NEUTRO,
+                    modifier = Modifier.weight(1f),
+                    onClick = onVoz,
+                )
+            }
             BotaoContorno(
                 texto = if (gravandoAudio) "Parar" else "Narração",
                 icone = if (gravandoAudio) R.drawable.ic_pv_stop else R.drawable.ic_pv_mic,
