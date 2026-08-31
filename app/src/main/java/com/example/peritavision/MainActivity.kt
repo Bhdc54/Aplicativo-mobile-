@@ -706,7 +706,13 @@ fun CaptureScreen() {
             return@LaunchedEffect
         }
         val streamer = AudioStreamer(enderecoBackend.trim(), jwt, id).apply {
-            onStatus = { msg -> status = msg }
+            onStatus = { msg ->
+                // Com o assistente IA ativo o ASR do backend não é mais usado
+                // para comando nenhum (o áudio segue subindo só por custódia),
+                // então o alerta dele viraria barulho na tela do perito.
+                val avisoDoAsr = msg.startsWith("Serviço de voz indisponível")
+                if (!(avisoDoAsr && ponteGemini != null)) status = msg
+            }
             onComando = { intencao, ouvido ->
                 // Terceiro caminho offline (ASR do backend). Mesma regra: com
                 // o assistente ligado, o dono do comando e o Gemini. O audio
