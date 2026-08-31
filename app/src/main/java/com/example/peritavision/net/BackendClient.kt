@@ -162,6 +162,15 @@ class BackendClient(var baseUrl: String) {
             .onFailure { Log.w(TAG, "evento nao registrado: ${it.message}") }
     }
 
+    /** Deposita um trecho da fala do perito (transcrita pelo Gemini Live) na
+     *  narração da sessão — é a fonte primária que preenche o laudo. */
+    suspend fun narrar(sessaoId: String, texto: String) {
+        val t = texto.trim()
+        if (t.isEmpty()) return
+        runCatching { postJson("/v1/sessoes/$sessaoId/narracao", JSONObject().put("texto", t.take(4000))) }
+            .onFailure { Log.w(TAG, "narracao nao registrada: ${it.message}") }
+    }
+
     /** Finaliza a sessao; o backend monta o laudo e devolve o id dele. */
     suspend fun finalizarSessao(sessaoId: String): String {
         val r = postJson("/v1/sessoes/$sessaoId/finalizar", JSONObject())

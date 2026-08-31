@@ -211,6 +211,12 @@ fun CaptureScreen() {
      *  "capturar", então o comando offline dispara E o Gemini chama a função
      *  capturar_foto — sem esta trava saíam duas fotos da mesma cena. */
     var ultimaCapturaMs by remember { mutableStateOf(0L) }
+    /** Fala do perito acumulada para a NARRAÇÃO do laudo (tudo vai; o cartão
+     *  na tela mostra só as perguntas com o chamado "PeritaVision"). */
+    var narracaoPendente by remember { mutableStateOf("") }
+    var narracaoUltimoMs by remember { mutableStateOf(0L) }
+    /** true enquanto a fala em curso contém o chamado — controla a exibição. */
+    var falaComChamado by remember { mutableStateOf(false) }
     var iaResposta by remember { mutableStateOf("") }
     /** true quando o servidor confirma que o vídeo dos óculos chegou ao
      *  Gemini. Sem isso o assistente responde "no escuro" — e já chamou um
@@ -267,8 +273,20 @@ fun CaptureScreen() {
         // depois de uma resposta) limpa o par e começa o turno seguinte.
         ponte.onVideoAtivo = { iaEnxergando = true }
         ponte.onTranscricao = { t ->
-            if (iaResposta.isNotBlank()) { iaPerito = ""; iaResposta = "" }
-            iaPerito += t
+            // TUDO que o perito fala vira narração do laudo (buffer com
+            // descarga por pausa — ver LaunchedEffect da narração).
+            narracaoPendente += t
+            narracaoUltimoMs = System.currentTimeMillis()
+            // Na TELA, só as falas dirigidas à IA (contêm o chamado). A fala
+            // comum do perito não é conversa com o app — poluía o cartão.
+            if (iaResposta.isNotBlank()) { iaPerito = ""; iaResposta = ""; falaComChamado = false }
+            val comChamado = falaComChamado ||
+                t.contains("peritavision", ignoreCase = true) ||
+                t.contains("perita vision", ignoreCase = true)
+            if (comChamado) {
+                falaComChamado = true
+                iaPerito += t
+            }
         }
         ponte.onResposta = { t -> iaResposta += t }
         iaEnxergando = false
@@ -276,6 +294,24 @@ fun CaptureScreen() {
         ponteGemini = ponte
         status = "Assistente IA conectando..."
     }
+    // NARRAÇÃO → LAUDO: as transcrições chegam em pedacinhos; junta e, após
+    // 2 s sem fala nova (ou 1500+ caracteres acumulados), grava o trecho no
+    // backend (pericia.trecho_narracao). É esta narração que o gerador usa
+    // como fonte primária para preencher os campos do laudo.
+    LaunchedEffect(ponteGemini, sessaoId) {
+        val id = sessaoId ?: return@LaunchedEffect
+        if (ponteGemini == null) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(700)
+            val pronta = narracaoPendente
+            val parada = System.currentTimeMillis() - narracaoUltimoMs > 2_000
+            if (pronta.isNotBlank() && (parada || pronta.length > 1_500)) {
+                narracaoPendente = ""
+                backend.narrar(id, pronta)
+            }
+        }
+    }
+
     fun alternarAssistenteIa() {
         val ativa = ponteGemini
         if (ativa != null) {
@@ -499,6 +535,11 @@ fun CaptureScreen() {
                     kotlinx.coroutines.delay(1500)
                 }
                 status = "Finalizando sessão..."
+                // Última fala ainda no buffer entra na narração antes do laudo.
+                if (narracaoPendente.isNotBlank()) {
+                    backend.narrar(id, narracaoPendente)
+                    narracaoPendente = ""
+                }
                 laudoId = backend.finalizarSessao(id)
                 sessaoId = null
                 rtmpUrl = null
