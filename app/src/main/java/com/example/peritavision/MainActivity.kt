@@ -377,7 +377,10 @@ fun CaptureScreen() {
         val f = fichaLacre
         val a = casoAtena
         val texto = buildString {
-            append("CONTEXTO DO CASO (registre e responda apenas \"Contexto do caso recebido.\"): ")
+            // Primeira vez → resumo de abertura falado (único momento em que a
+            // IA fala sem ser chamada); reenvio (reconexão) → só "Contexto
+            // atualizado." — o modo de chamada por nome está no prompt (1.1).
+            append("CONTEXTO DO CASO (na PRIMEIRA vez, faça o resumo de abertura falado; se já o fez nesta sessão, responda apenas \"Contexto atualizado.\"): ")
             append("protocolo ${protocolo.trim().ifBlank { "não informado" }}.")
             // Dados do Atena resolvidos na abertura da sessão — cobrem o caso
             // aberto por protocolo digitado, sem passar pela leitura do lacre.
