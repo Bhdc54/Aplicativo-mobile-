@@ -632,10 +632,18 @@ fun CaptureScreen() {
      */
     LaunchedEffect(sessaoId, conectado, usarVozDoCelular, ponteGemini) {
         val mentra = device as? MentraGlassesDevice
-        // Assistente IA ligado = reconhecedor offline DESLIGADO (ver acima).
-        val deveEscutar = sessaoId != null && ponteGemini == null &&
-            (mentra == null || conectado)
-        val pelosOculos = mentra != null && !usarVozDoCelular
+        // CUIDADO: iniciarComandoDeVoz() é o que LIGA O MICROFONE dos óculos —
+        // é dele que sai o PCM que alimenta o assistente IA e a custódia.
+        // Desligar a escuta com a IA ativa deixava a IA SURDA (perito falava
+        // e nada acontecia). Então: com óculos, o microfone fica ligado sempre
+        // que há sessão — quem foi desligado com a IA é só a AÇÃO offline
+        // (onComandoVoz = null, ASR ignorado). Já o reconhecedor do CELULAR
+        // (Vosk) não alimenta a IA, só dispara comando — esse sim fica de
+        // reserva, ligado apenas com a IA desligada.
+        val pelosOculosPossivel = mentra != null && !usarVozDoCelular
+        val deveEscutar = sessaoId != null &&
+            (if (pelosOculosPossivel) conectado else ponteGemini == null)
+        val pelosOculos = pelosOculosPossivel
         if (deveEscutar && !vozAtiva) {
             if (pelosOculos) mentra.iniciarComandoDeVoz() else voz.iniciar()
             vozAtiva = true
