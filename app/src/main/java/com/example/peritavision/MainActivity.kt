@@ -345,7 +345,8 @@ fun CaptureScreen() {
     var wifiSsid by remember { mutableStateOf("") }
     var wifiSenha by remember { mutableStateOf("") }
     var matricula by remember { mutableStateOf(MATRICULA_PADRAO) }
-    var senhaPerito by remember { mutableStateOf(SENHA_PADRAO) }
+    // Credencial DO TABLET (local.properties), não do perito: some da tela.
+    val senhaPerito = SENHA_PADRAO
     var protocolo by remember { mutableStateOf(PROTOCOLO_PADRAO) }
     var rtmpUrl by remember { mutableStateOf<String?>(null) }
     var videoLigado by remember { mutableStateOf(false) }
@@ -462,7 +463,7 @@ fun CaptureScreen() {
             lendoLacre = true
             try {
                 backend.baseUrl = enderecoBackend.trim()
-                backend.login(matricula.trim(), senhaPerito.trim())
+                backend.login(MATRICULA_PADRAO, senhaPerito)
                 status = "Aponte os óculos para o lacre..."
                 val cred = backend.solicitarLeituraLacre()
                 mentra.capturarFotoComAutorizacao(
@@ -500,13 +501,13 @@ fun CaptureScreen() {
             try {
                 backend.baseUrl = enderecoBackend.trim()
                 status = "Entrando no backend..."
-                backend.login(matricula.trim(), senhaPerito.trim())
+                backend.login(MATRICULA_PADRAO, senhaPerito)
                 status = "Resolvendo protocolo ${protocolo.trim()}..."
                 val caso = backend.resolverProtocolo(protocolo.trim())
                 casoAtena = caso
                 val perfilId = backend.primeiroPerfil()
                 status = "Abrindo sessão..."
-                val aberta = backend.abrirSessao(caso.id, perfilId)
+                val aberta = backend.abrirSessao(caso.id, perfilId, matricula.trim())
                 sessaoId = aberta.sessaoId
                 rtmpUrl = aberta.rtmpUrl
                 falarSeSemIa("Sessão iniciada. Pode capturar.")
@@ -955,8 +956,6 @@ fun CaptureScreen() {
             destaque = passo == Passo.SESSAO,
             matricula = matricula,
             onMatricula = { matricula = it },
-            senha = senhaPerito,
-            onSenha = { senhaPerito = it },
             // Leitura de lacre agora é PELOS ÓCULOS (o scanner da câmera do
             // tablet saiu). No modo PHONE (sem óculos), o leitor local continua
             // como plano B de teste.
@@ -1280,8 +1279,6 @@ private fun CartaoServidor(
     onLerLacre: () -> Unit,
     matricula: String,
     onMatricula: (String) -> Unit,
-    senha: String,
-    onSenha: (String) -> Unit,
     protocolo: String,
     onProtocolo: (String) -> Unit,
     editavel: Boolean,
@@ -1311,22 +1308,16 @@ private fun CartaoServidor(
         )
         Spacer(Modifier.height(10.dp))
         if (!temSessao) {
-            // IDENTIFICAÇÃO DO PERITO: a sessão fica registrada em nome de quem
-            // abriu, e cada perito só enxerga as perícias dele no painel — só o
-            // admin vê todas. Por isso a matrícula é digitada aqui, por pessoa.
+            // QUEM ESTÁ NA BANCADA. Não é login — é identificação: o tablet é
+            // compartilhado e entra com a credencial dele (local.properties),
+            // e esta matrícula diz de quem é a perícia. É ela que separa os
+            // laudos por perito no painel. A senha existe onde importa: no
+            // painel web, para revisar e validar o laudo.
             CampoPv(
                 valor = matricula,
                 onValueChange = onMatricula,
                 rotulo = "Matrícula do perito",
                 habilitado = editavel,
-            )
-            Spacer(Modifier.height(9.dp))
-            CampoPv(
-                valor = senha,
-                onValueChange = onSenha,
-                rotulo = "Senha",
-                habilitado = editavel,
-                segredo = true,
             )
             Spacer(Modifier.height(9.dp))
             CampoPv(

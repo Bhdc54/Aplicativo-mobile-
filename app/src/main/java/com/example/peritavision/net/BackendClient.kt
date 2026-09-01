@@ -131,8 +131,10 @@ class BackendClient(var baseUrl: String) {
 
     data class SessaoAberta(val sessaoId: String, val rtmpUrl: String?)
 
-    suspend fun abrirSessao(casoId: String, perfilId: String): SessaoAberta {
+    /** @param matriculaPerito quem está na bancada — separa os laudos por perito. */
+    suspend fun abrirSessao(casoId: String, perfilId: String, matriculaPerito: String): SessaoAberta {
         val corpo = JSONObject().put("casoId", casoId).put("perfilId", perfilId)
+            .put("matriculaPerito", matriculaPerito)
         val r = postJson("/v1/sessoes", corpo)
         val id = r.optString("sessaoId").takeIf { it.isNotBlank() }
             ?: throw BackendException("sessao sem id: $r")
