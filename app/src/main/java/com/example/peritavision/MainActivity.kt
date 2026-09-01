@@ -953,6 +953,10 @@ fun CaptureScreen() {
     val cartaoServidor: @Composable () -> Unit = {
         CartaoServidor(
             destaque = passo == Passo.SESSAO,
+            matricula = matricula,
+            onMatricula = { matricula = it },
+            senha = senhaPerito,
+            onSenha = { senhaPerito = it },
             // Leitura de lacre agora é PELOS ÓCULOS (o scanner da câmera do
             // tablet saiu). No modo PHONE (sem óculos), o leitor local continua
             // como plano B de teste.
@@ -1274,6 +1278,10 @@ private fun CartaoWifiOculos(
 private fun CartaoServidor(
     destaque: Boolean,
     onLerLacre: () -> Unit,
+    matricula: String,
+    onMatricula: (String) -> Unit,
+    senha: String,
+    onSenha: (String) -> Unit,
     protocolo: String,
     onProtocolo: (String) -> Unit,
     editavel: Boolean,
@@ -1303,6 +1311,24 @@ private fun CartaoServidor(
         )
         Spacer(Modifier.height(10.dp))
         if (!temSessao) {
+            // IDENTIFICAÇÃO DO PERITO: a sessão fica registrada em nome de quem
+            // abriu, e cada perito só enxerga as perícias dele no painel — só o
+            // admin vê todas. Por isso a matrícula é digitada aqui, por pessoa.
+            CampoPv(
+                valor = matricula,
+                onValueChange = onMatricula,
+                rotulo = "Matrícula do perito",
+                habilitado = editavel,
+            )
+            Spacer(Modifier.height(9.dp))
+            CampoPv(
+                valor = senha,
+                onValueChange = onSenha,
+                rotulo = "Senha",
+                habilitado = editavel,
+                segredo = true,
+            )
+            Spacer(Modifier.height(9.dp))
             CampoPv(
                 valor = protocolo,
                 onValueChange = onProtocolo,

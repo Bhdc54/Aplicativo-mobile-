@@ -407,6 +407,8 @@ fun CampoPv(
     rotulo: String,
     habilitado: Boolean = true,
     endereco: Boolean = false,
+    /** true = campo de senha: mascara os caracteres e usa teclado de senha. */
+    segredo: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
@@ -424,8 +426,17 @@ fun CampoPv(
             shape = MaterialTheme.shapes.small,
             textStyle = MaterialTheme.typography.bodyMedium,
             keyboardOptions = KeyboardOptions(
-                keyboardType = if (endereco) KeyboardType.Uri else KeyboardType.Text
+                keyboardType = when {
+                    segredo -> KeyboardType.Password
+                    endereco -> KeyboardType.Uri
+                    else -> KeyboardType.Text
+                }
             ),
+            visualTransformation = if (segredo) {
+                androidx.compose.ui.text.input.PasswordVisualTransformation()
+            } else {
+                androidx.compose.ui.text.input.VisualTransformation.None
+            },
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
                 unfocusedBorderColor = MaterialTheme.colorScheme.outline,
