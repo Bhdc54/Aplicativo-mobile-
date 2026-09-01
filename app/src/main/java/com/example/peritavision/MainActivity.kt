@@ -228,12 +228,18 @@ fun CaptureScreen() {
     /** true só durante a janela em que a IA está realmente OLHANDO. */
     var iaOlhandoAgora by remember { mutableStateOf(false) }
 
-    /** UMA voz só na bancada: com o assistente IA ativo, quem fala é o Gemini
-     *  (inclusive "Capturando" e o anúncio de sessão — instruído no servidor
-     *  da ponte); a voz sintética do Android fica para quando a IA está
-     *  desligada. Sem isto as duas vozes saíam uma por cima da outra. */
+    /** true quando o perito DESLIGOU o assistente à mão nesta sessão. */
+    var iaDesligadaManual by remember { mutableStateOf(false) }
+
+    /** UMA voz só na bancada. Quem fala é o Gemini sempre que o assistente
+     *  existe — mesmo nos segundos em que ele ainda está conectando (checar
+     *  ponteGemini == null aqui criava a corrida das DUAS VOZES na abertura:
+     *  o TTS anunciava a sessão e o resumo do Gemini vinha por cima). A voz
+     *  sintética do Android só assume quando não há ponte configurada ou o
+     *  perito desligou o assistente. */
     fun falarSeSemIa(texto: String) {
-        if (ponteGemini == null) vozFeedback.falar(texto)
+        val iaExiste = BuildConfig.PV_PONTE_URL.isNotBlank() && !iaDesligadaManual
+        if (!iaExiste) vozFeedback.falar(texto)
     }
 
     // ── Comando de voz ────────────────────────────────────────────────────
@@ -323,9 +329,11 @@ fun CaptureScreen() {
             ativa.encerrar()
             ponteGemini = null
             iaEnxergando = false
+            iaDesligadaManual = true // o TTS reassume as falas da bancada
             status = "Assistente IA desligado."
             return
         }
+        iaDesligadaManual = false
         ligarAssistenteIa()
     }
     // AUTOMÁTICO: sessão abriu → assistente liga sozinho; sessão fechou →
@@ -334,6 +342,7 @@ fun CaptureScreen() {
     // dele manda mais que o automatismo.
     LaunchedEffect(sessaoId) {
         if (sessaoId != null) {
+            iaDesligadaManual = false
             ligarAssistenteIa()
         } else {
             ponteGemini?.encerrar()
@@ -745,9 +754,12 @@ fun CaptureScreen() {
                         pedidoFinalizarMs = agora
                         ponteGemini?.responderComando(
                             id, nome, false,
-                            "NÃO encerrei. Pergunte em voz alta: \"Confirma o encerramento da " +
-                                "sessão? Isso fecha a perícia e gera o laudo.\" Só chame esta " +
-                                "função de novo depois de um sim claro do perito.",
+                            "A SESSÃO CONTINUA ABERTA — nada foi encerrado. Faça exatamente isto: " +
+                                "(1) pergunte em voz alta \"Confirma o encerramento da sessão? Isso " +
+                                "fecha a perícia e gera o laudo\"; (2) quando o perito confirmar, " +
+                                "CHAME finalizar_sessao DE NOVO — é a segunda chamada que encerra. " +
+                                "PROIBIDO dizer que a sessão foi finalizada: só anuncie encerramento " +
+                                "quando esta função devolver ok=true.",
                         )
                     } else {
                         pedidoFinalizarMs = 0L
