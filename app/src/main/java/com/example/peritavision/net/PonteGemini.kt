@@ -158,6 +158,7 @@ class PonteGemini(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (webSocket !== ws) return // socket antigo
                 val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
                 when (msg.optString("tipo")) {
                     "pronto" -> {
@@ -179,6 +180,7 @@ class PonteGemini(
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                if (webSocket !== ws) return // socket antigo
                 // 0x03 = voz de resposta. O write é bloqueante, mas roda na
                 // thread do OkHttp, não na UI.
                 if (bytes.size > 1 && bytes[0] == 0x03.toByte()) {
@@ -198,6 +200,12 @@ class PonteGemini(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                // Socket ANTIGO avisando que morreu depois de já existir uma
+                // conexão nova: ignorar. Sem isto, o servidor derruba a
+                // conexão velha (anti-zumbi), o velho cai aqui, reconecta,
+                // o servidor derruba a "nova velha"... pingue-pongue infinito
+                // que fechava a transmissão no meio da perícia.
+                if (webSocket !== ws) return
                 pronto = false
                 Log.w(TAG, "ponte caiu: ${t.message}")
                 // AUTOMÁTICO: rede de bancada pisca, servidor reinicia — a
@@ -213,6 +221,7 @@ class PonteGemini(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (webSocket !== ws) return // socket antigo — já há conexão nova
                 pronto = false
                 // Fechamento LIMPO também reconecta: um redeploy da ponte no
                 // servidor encerra a conexão educadamente (não é "falha"), e
