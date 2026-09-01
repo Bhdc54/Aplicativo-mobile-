@@ -51,6 +51,8 @@ class PonteGemini(
     /** Chamado quando o servidor confirma que o vídeo dos óculos chegou ao
      *  Gemini — só então o assistente realmente ENXERGA a bancada. */
     var onVideoAtivo: () -> Unit = {}
+    /** Janela de visão abriu/fechou: a IA só OLHA quando o perito pede. */
+    var onVisao: (Boolean) -> Unit = {}
     /** O Gemini pediu uma função de bancada (capturar_foto, finalizar_sessao).
      *  Quem executa é o app; responda com responderComando(id, nome, ...). */
     var onComando: (id: String, nome: String) -> Unit = { _, _ -> }
@@ -170,6 +172,7 @@ class PonteGemini(
                     "transcricaoEntrada" -> onTranscricao(msg.optString("texto"))
                     "textoResposta" -> onResposta(msg.optString("texto"))
                     "videoAtivo" -> onVideoAtivo()
+                    "visao" -> onVisao(msg.optBoolean("ativa"))
                     "comando" -> onComando(msg.optString("id"), msg.optString("nome"))
                     "erro" -> onStatus("Assistente IA: ${msg.optString("mensagem")}")
                 }

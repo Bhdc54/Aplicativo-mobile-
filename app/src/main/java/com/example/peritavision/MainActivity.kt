@@ -211,6 +211,8 @@ fun CaptureScreen() {
      *  "capturar", então o comando offline dispara E o Gemini chama a função
      *  capturar_foto — sem esta trava saíam duas fotos da mesma cena. */
     var ultimaCapturaMs by remember { mutableStateOf(0L) }
+    /** Quando a IA pediu para encerrar pela 1ª vez (aguardando confirmação). */
+    var pedidoFinalizarMs by remember { mutableStateOf(0L) }
     /** Fala do perito acumulada para a NARRAÇÃO do laudo (tudo vai; o cartão
      *  na tela mostra só as perguntas com o chamado "PeritaVision"). */
     var narracaoPendente by remember { mutableStateOf("") }
@@ -223,6 +225,8 @@ fun CaptureScreen() {
      *  celular de peça íntima. O cartão mostra isso para o perito saber se
      *  pode confiar no que ele diz estar vendo. */
     var iaEnxergando by remember { mutableStateOf(false) }
+    /** true só durante a janela em que a IA está realmente OLHANDO. */
+    var iaOlhandoAgora by remember { mutableStateOf(false) }
 
     /** UMA voz só na bancada: com o assistente IA ativo, quem fala é o Gemini
      *  (inclusive "Capturando" e o anúncio de sessão — instruído no servidor
@@ -272,6 +276,7 @@ fun CaptureScreen() {
         // "passava correndo" na tela. Fala nova do perito (primeiro pedaço
         // depois de uma resposta) limpa o par e começa o turno seguinte.
         ponte.onVideoAtivo = { iaEnxergando = true }
+        ponte.onVisao = { ativa -> iaOlhandoAgora = ativa }
         ponte.onTranscricao = { t ->
             // TUDO que o perito fala vira narração do laudo (buffer com
             // descarga por pausa — ver LaunchedEffect da narração).
@@ -729,8 +734,26 @@ fun CaptureScreen() {
                     }
                 }
                 "finalizar_sessao" -> {
-                    finalizarSessao()
-                    ponteGemini?.responderComando(id, nome, true, "sessão sendo finalizada; laudo entrará em processamento")
+                    // DOIS TEMPOS, TRAVADO EM CÓDIGO. A regra de confirmação no
+                    // prompt não bastou: em teste real a IA encerrou a perícia
+                    // sozinha no meio de uma resposta, e encerrar é irreversível
+                    // (fecha a sessão e dispara o laudo). Agora a PRIMEIRA
+                    // chamada nunca encerra — só manda ela perguntar. Só a
+                    // segunda, dentro de 2 minutos, executa.
+                    val agora = System.currentTimeMillis()
+                    if (agora - pedidoFinalizarMs > 120_000L) {
+                        pedidoFinalizarMs = agora
+                        ponteGemini?.responderComando(
+                            id, nome, false,
+                            "NÃO encerrei. Pergunte em voz alta: \"Confirma o encerramento da " +
+                                "sessão? Isso fecha a perícia e gera o laudo.\" Só chame esta " +
+                                "função de novo depois de um sim claro do perito.",
+                        )
+                    } else {
+                        pedidoFinalizarMs = 0L
+                        finalizarSessao()
+                        ponteGemini?.responderComando(id, nome, true, "sessão sendo finalizada; laudo entrará em processamento")
+                    }
                 }
                 else -> ponteGemini?.responderComando(id, nome, false, "função desconhecida")
             }
@@ -1029,6 +1052,7 @@ fun CaptureScreen() {
         if (ehMentra) CartaoAssistenteIa(
             ativo = ponteGemini != null,
             enxergando = iaEnxergando,
+            olhandoAgora = iaOlhandoAgora,
             perito = iaPerito,
             resposta = iaResposta,
             onAlternar = { alternarAssistenteIa() },
@@ -1625,7 +1649,10 @@ private fun CartaoFichaLacre(
 @Composable
 private fun CartaoAssistenteIa(
     ativo: Boolean,
+    /** o circuito de vídeo está de pé (quadros chegando ao servidor) */
     enxergando: Boolean,
+    /** a IA está REALMENTE olhando agora (janela aberta por pedido do perito) */
+    olhandoAgora: Boolean,
     perito: String,
     resposta: String,
     onAlternar: () -> Unit,
@@ -1633,8 +1660,20 @@ private fun CartaoAssistenteIa(
     CartaoPv {
         CabecalhoCartao(
             titulo = "Assistente IA (teste)",
-            etiqueta = if (!ativo) "desligado" else if (enxergando) "vendo" else "sem imagem",
-            tomEtiqueta = if (!ativo) Tom.NEUTRO else if (enxergando) Tom.OK else Tom.ATENCAO,
+            // Três estados de verdade, não dois: desligado / câmera pronta mas
+            // em repouso (o normal, e é o que economiza) / olhando agora.
+            etiqueta = when {
+                !ativo -> "desligado"
+                olhandoAgora -> "olhando agora"
+                enxergando -> "câmera pronta"
+                else -> "sem imagem"
+            },
+            tomEtiqueta = when {
+                !ativo -> Tom.NEUTRO
+                olhandoAgora -> Tom.OK
+                enxergando -> Tom.NEUTRO
+                else -> Tom.ATENCAO
+            },
         )
         if (!ativo) {
             TextoApoio(
@@ -1651,6 +1690,12 @@ private fun CartaoAssistenteIa(
             TextoApoio(
                 "Sem imagem dos óculos: o assistente ouve, mas NÃO está vendo a bancada — " +
                     "não confie no que ele disser sobre o material.",
+            )
+            Spacer(Modifier.height(8.dp))
+        } else if (!olhandoAgora) {
+            TextoApoio(
+                "A câmera está pronta, mas em repouso — ele ouve tudo e só OLHA quando você " +
+                    "pedir (\"PeritaVision, o que tenho na mão?\" ou um pedido de foto).",
             )
             Spacer(Modifier.height(8.dp))
         }
