@@ -1,0 +1,69 @@
+package com.example.peritavision.data
+
+import android.content.Context
+import android.content.SharedPreferences
+
+/**
+ * CONFIGURAÇÕES DO APP (aba "Configurações", engrenagem na barra de topo).
+ *
+ * Guardadas em SharedPreferences — sobrevivem a fechar o app, mas NÃO vão para
+ * o backend: são escolhas do tablet, não da perícia. Hoje duas coisas, ambas
+ * do assistente de voz (ponte Gemini Live):
+ *
+ *  - trilha  → qual roteiro a IA carrega. "perguntar" (padrão) deixa a IA
+ *              perguntar ao perito na abertura ("objeto cortante ou peça
+ *              íntima?"); um id fixo ("A", "B", "nenhuma"...) pula a pergunta.
+ *              A lista de ids vem do catálogo da ponte, então uma trilha nova
+ *              registrada lá aparece aqui sem mexer no app.
+ *  - modelo  → nome do modelo Gemini Live. Vazio = padrão do servidor.
+ *
+ * Valem para a PRÓXIMA sessão: a sessão em andamento já nasceu com as
+ * escolhas anteriores.
+ */
+class ConfiguracoesApp(context: Context) {
+    private val prefs: SharedPreferences =
+        context.getSharedPreferences("pv_configuracoes", Context.MODE_PRIVATE)
+
+    /** "perguntar" ou o id de uma trilha do catálogo. */
+    var trilha: String
+        get() = prefs.getString(CHAVE_TRILHA, TRILHA_PERGUNTAR) ?: TRILHA_PERGUNTAR
+        set(v) = prefs.edit().putString(CHAVE_TRILHA, v.ifBlank { TRILHA_PERGUNTAR }).apply()
+
+    /** Nome do modelo; vazio = deixa a ponte usar o padrão dela. */
+    var modelo: String
+        get() = prefs.getString(CHAVE_MODELO, "") ?: ""
+        set(v) = prefs.edit().putString(CHAVE_MODELO, v.trim()).apply()
+
+    /** O que vai no {tipo:'iniciar'} da ponte: null = "não fixei, pergunte". */
+    fun trilhaParaPonte(): String? = trilha.takeIf { it != TRILHA_PERGUNTAR && it.isNotBlank() }
+
+    companion object {
+        const val TRILHA_PERGUNTAR = "perguntar"
+        private const val CHAVE_TRILHA = "assistente.trilha"
+        private const val CHAVE_MODELO = "assistente.modelo"
+    }
+}
+
+/** Uma trilha como a ponte descreve no catálogo. */
+data class TrilhaCatalogo(val id: String, val nome: String, val descricao: String)
+
+/** Catálogo devolvido pela ponte em {tipo:'catalogo'}. */
+data class CatalogoPonte(
+    val trilhas: List<TrilhaCatalogo>,
+    val modelos: List<String>,
+    val modeloPadrao: String,
+) {
+    companion object {
+        /** Cópia local para a tela não ficar vazia quando a ponte está fora do
+         *  alcance. Deve espelhar prompts/index.mjs — se divergir, a ponte manda. */
+        val PADRAO = CatalogoPonte(
+            trilhas = listOf(
+                TrilhaCatalogo("A", "Faca / perfurocortante", "Lesão corporal, homicídio, ameaça — 7 blocos, do lacre à contraprova."),
+                TrilhaCatalogo("B", "Peça íntima", "Crimes sexuais — 6 blocos, linguagem clínica, limites interpretativos."),
+                TrilhaCatalogo("nenhuma", "Sem roteiro (assistente geral)", "Outros exames: foto, lacre, narração e fechamento, sem passo a passo."),
+            ),
+            modelos = listOf("gemini-3.1-flash-live-preview"),
+            modeloPadrao = "gemini-3.1-flash-live-preview",
+        )
+    }
+}
