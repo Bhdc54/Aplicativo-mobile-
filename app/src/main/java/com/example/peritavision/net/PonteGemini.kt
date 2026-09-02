@@ -58,6 +58,9 @@ class PonteGemini(
     /** Trilha definida (id, nome, origem 'perito'|'app'|'memoria'): a sessão
      *  de trabalho está de pé com o roteiro certo. */
     var onTrilha: (id: String, nome: String, origem: String) -> Unit = { _, _, _ -> }
+    /** Portão de fala da ponte: true = em conversa (chamou "PeritaVision");
+     *  false = off — só ouvindo e anotando para o laudo. */
+    var onAtendimento: (Boolean) -> Unit = {}
     var onResposta: (String) -> Unit = {}
     var onStatus: (String) -> Unit = {}
     /** Chamado quando o servidor confirma que o vídeo dos óculos chegou ao
@@ -192,6 +195,7 @@ class PonteGemini(
                     "videoAtivo" -> onVideoAtivo()
                     "visao" -> onVisao(msg.optBoolean("ativa"))
                     "triagem" -> onTriagem()
+                    "atendimento" -> onAtendimento(msg.optBoolean("ativo"))
                     "trilha" -> onTrilha(msg.optString("trilha"), msg.optString("nome"), msg.optString("origem"))
                     "comando" -> onComando(msg.optString("id"), msg.optString("nome"))
                     "erro" -> onStatus("Assistente IA: ${msg.optString("mensagem")}")
