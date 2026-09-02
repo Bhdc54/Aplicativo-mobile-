@@ -41,6 +41,18 @@ class ConfiguracoesApp(context: Context) {
         get() = prefs.getString(CHAVE_MATRICULA, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_MATRICULA, v.trim()).apply()
 
+    /** Wi-Fi do local, como digitado em Configurações. Fica salvo no tablet e
+     *  é ENVIADO SOZINHO aos óculos toda vez que eles conectam — o perito
+     *  digita a rede uma vez por local, não por perícia. A senha fica em
+     *  SharedPreferences privado do app (tablet de bancada, sem conta de
+     *  usuário); se isso virar problema, o caminho é EncryptedSharedPreferences. */
+    var wifiSsid: String
+        get() = prefs.getString(CHAVE_WIFI_SSID, "") ?: ""
+        set(v) = prefs.edit().putString(CHAVE_WIFI_SSID, v).apply()
+    var wifiSenha: String
+        get() = prefs.getString(CHAVE_WIFI_SENHA, "") ?: ""
+        set(v) = prefs.edit().putString(CHAVE_WIFI_SENHA, v).apply()
+
     /** O que vai no {tipo:'iniciar'} da ponte: null = "não fixei, pergunte". */
     fun trilhaParaPonte(): String? = trilha.takeIf { it != TRILHA_PERGUNTAR && it.isNotBlank() }
 
@@ -49,6 +61,8 @@ class ConfiguracoesApp(context: Context) {
         private const val CHAVE_TRILHA = "assistente.trilha"
         private const val CHAVE_MODELO = "assistente.modelo"
         private const val CHAVE_MATRICULA = "pericia.ultima_matricula"
+        private const val CHAVE_WIFI_SSID = "oculos.wifi_ssid"
+        private const val CHAVE_WIFI_SENHA = "oculos.wifi_senha"
     }
 }
 
