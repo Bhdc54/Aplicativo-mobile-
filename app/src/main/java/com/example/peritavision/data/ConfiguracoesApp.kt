@@ -34,6 +34,13 @@ class ConfiguracoesApp(context: Context) {
         get() = prefs.getString(CHAVE_MODELO, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_MODELO, v.trim()).apply()
 
+    /** Última matrícula que abriu uma perícia neste tablet — o campo já vem
+     *  preenchido na próxima vez (o tablet é compartilhado, mas quem usa
+     *  costuma ser o mesmo perito por dias). */
+    var ultimaMatricula: String
+        get() = prefs.getString(CHAVE_MATRICULA, "") ?: ""
+        set(v) = prefs.edit().putString(CHAVE_MATRICULA, v.trim()).apply()
+
     /** O que vai no {tipo:'iniciar'} da ponte: null = "não fixei, pergunte". */
     fun trilhaParaPonte(): String? = trilha.takeIf { it != TRILHA_PERGUNTAR && it.isNotBlank() }
 
@@ -41,6 +48,7 @@ class ConfiguracoesApp(context: Context) {
         const val TRILHA_PERGUNTAR = "perguntar"
         private const val CHAVE_TRILHA = "assistente.trilha"
         private const val CHAVE_MODELO = "assistente.modelo"
+        private const val CHAVE_MATRICULA = "pericia.ultima_matricula"
     }
 }
 

@@ -116,7 +116,8 @@ private val BACKEND_PADRAO = BuildConfig.PV_BACKEND
 // senha no codigo-fonte (este arquivo vai para o git).
 private val MATRICULA_PADRAO = BuildConfig.PV_MATRICULA
 private val SENHA_PADRAO = BuildConfig.PV_SENHA
-private val PROTOCOLO_PADRAO = BuildConfig.PV_PROTOCOLO
+// PV_PROTOCOLO (local.properties) NÃO preenche mais a tela: o campo começa
+// vazio — o protocolo de teste aparecendo em toda abertura induzia a erro.
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -406,10 +407,12 @@ fun CaptureScreen() {
     var ssidOculos by remember { mutableStateOf<String?>(null) }
     var wifiSsid by remember { mutableStateOf("") }
     var wifiSenha by remember { mutableStateOf("") }
-    var matricula by remember { mutableStateOf(MATRICULA_PADRAO) }
+    // Matrícula: a última que abriu perícia neste tablet (Configurações), ou a
+    // de dev do local.properties na primeira vez. Protocolo: sempre vazio.
+    var matricula by remember { mutableStateOf(config.ultimaMatricula.ifBlank { MATRICULA_PADRAO }) }
     // Credencial DO TABLET (local.properties), não do perito: some da tela.
     val senhaPerito = SENHA_PADRAO
-    var protocolo by remember { mutableStateOf(PROTOCOLO_PADRAO) }
+    var protocolo by remember { mutableStateOf("") }
     var rtmpUrl by remember { mutableStateOf<String?>(null) }
     var videoLigado by remember { mutableStateOf(false) }
 
@@ -559,6 +562,7 @@ fun CaptureScreen() {
                 val perfilId = backend.primeiroPerfil()
                 status = "Abrindo sessão..."
                 val aberta = backend.abrirSessao(caso.id, perfilId, matricula.trim())
+                config.ultimaMatricula = matricula // lembra para a próxima perícia
                 sessaoId = aberta.sessaoId
                 rtmpUrl = aberta.rtmpUrl
                 laudoId = null
@@ -1009,10 +1013,16 @@ fun CaptureScreen() {
     // sem duplicar nenhum parâmetro. Design aprovado em 24/08/2026.
     // Numeração do checklist: Óculos → Wi-Fi → Perícia (no modo PHONE, sem
     // óculos, são só dois passos: Câmera → Perícia).
-    val numeroPericia = if (ehMentra) 3 else 2
-    val totalPassos = numeroPericia
-    val passosProntos = (if (ehMentra) (if (conectado) 1 else 0) + (if (wifiOculos) 1 else 0)
-        else (if (temPermissoes) 1 else 0)) + (if (temSessao) 1 else 0)
+    // Desde 02/09/2026 óculos e Wi-Fi moram na aba Configurações (engrenagem):
+    // a tela principal tem UM passo, a perícia. O apoio do título diz o que
+    // ainda falta lá em Configurações para poder abrir.
+    val numeroPericia = 1
+    val apoioPreparo = when {
+        ehMentra && !conectado -> "óculos desconectados — conecte em Configurações"
+        ehMentra && !wifiOculos -> "Wi-Fi dos óculos pendente — em Configurações"
+        !ehMentra && !temPermissoes -> "conceda câmera e microfone"
+        else -> "pronto para abrir"
+    }
 
     val cartaoOculos: @Composable () -> Unit = {
         CartaoOculos(
@@ -1047,6 +1057,7 @@ fun CaptureScreen() {
             numero = numeroPericia,
             bloqueado = !hardwarePronto,
             destaque = passo == Passo.SESSAO,
+            onAbrirConfiguracoes = { mostrarConfiguracoes = true },
             matricula = matricula,
             onMatricula = { matricula = it },
             // Leitura de lacre agora é PELOS ÓCULOS (o scanner da câmera do
@@ -1176,9 +1187,7 @@ fun CaptureScreen() {
         ) {
             Spacer(Modifier.height(2.dp))
             if (!temSessao) {
-                TituloSecao("Antes de começar", "$passosProntos de $totalPassos prontos")
-                cartaoOculos()
-                cartaoWifi()
+                TituloSecao("Antes de começar", apoioPreparo)
                 cartaoFichaLacre()
                 cartaoServidor()
                 cartaoEvidencia()
@@ -1188,8 +1197,6 @@ fun CaptureScreen() {
                 cartaoLaudo()
                 cartaoAssistente()
                 cartaoEvidencia()
-                cartaoWifi()
-                cartaoOculos()
             }
             RodapeMarca(NOME_EMPRESA)
         }
@@ -1210,6 +1217,12 @@ fun CaptureScreen() {
             config = config,
             urlPonte = BuildConfig.PV_PONTE_URL,
             onVoltar = { mostrarConfiguracoes = false },
+            // Óculos e Wi-Fi: os mesmos cartões de antes, com o mesmo estado —
+            // só mudaram de tela. Conectar aqui reflete na faixa de prontidão.
+            secaoOculos = {
+                cartaoOculos()
+                cartaoWifi()
+            },
         )
     }
     }
@@ -1359,6 +1372,8 @@ private fun CartaoServidor(
     numero: Int,
     bloqueado: Boolean,
     destaque: Boolean,
+    /** óculos/Wi-Fi ficam em Configurações: quando bloqueado, o atalho vai para lá */
+    onAbrirConfiguracoes: () -> Unit,
     onLerLacre: () -> Unit,
     matricula: String,
     onMatricula: (String) -> Unit,
@@ -1393,6 +1408,16 @@ private fun CartaoServidor(
                 "Informe o protocolo — os dados da perícia vêm do ATENA."
             }
         )
+        if (bloqueado && !temSessao) {
+            Spacer(Modifier.height(8.dp))
+            TextoApoio("Óculos desconectados. Conecte-os e envie o Wi-Fi em Configurações.", Tom.ATENCAO)
+            Spacer(Modifier.height(10.dp))
+            BotaoTonal(
+                texto = "Abrir Configurações",
+                icone = R.drawable.ic_pv_ajustes,
+                onClick = onAbrirConfiguracoes,
+            )
+        }
         Spacer(Modifier.height(10.dp))
         if (!temSessao) {
             // QUEM ESTÁ NA BANCADA. Não é login — é identificação: o tablet é

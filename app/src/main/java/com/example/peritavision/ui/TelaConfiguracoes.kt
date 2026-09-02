@@ -61,6 +61,8 @@ fun TelaConfiguracoes(
     config: ConfiguracoesApp,
     urlPonte: String,
     onVoltar: () -> Unit,
+    /** Cartões de óculos e Wi-Fi (vêm da CaptureScreen, com o estado dela). */
+    secaoOculos: (@Composable () -> Unit)? = null,
 ) {
     BackHandler(onBack = onVoltar)
 
@@ -118,7 +120,7 @@ fun TelaConfiguracoes(
             Column(Modifier.weight(1f)) {
                 Text("Configurações", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
                 Text(
-                    "Valem para a próxima sessão",
+                    "Óculos, Wi-Fi e assistente de voz",
                     style = MaterialTheme.typography.labelSmall,
                     color = PvTheme.extras.textoSuave,
                 )
@@ -135,6 +137,10 @@ fun TelaConfiguracoes(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Spacer(Modifier.height(2.dp))
+            if (secaoOculos != null) {
+                TituloSecao("Óculos", "conecte uma vez; vale até desligar")
+                secaoOculos()
+            }
             TituloSecao("Assistente de voz", origemCatalogo)
 
             // ── ROTEIRO (trilha) ────────────────────────────────────────────
@@ -142,7 +148,8 @@ fun TelaConfiguracoes(
                 CabecalhoCartao(titulo = "Roteiro do exame", grande = true)
                 TextoApoio(
                     "Qual prompt a IA carrega. No padrão ela pergunta ao perito na abertura " +
-                        "e monta a sessão só com o roteiro daquele exame — prompt menor, IA mais atenta.",
+                        "e monta a sessão só com o roteiro daquele exame — prompt menor, IA mais atenta. " +
+                        "Vale para a próxima sessão.",
                 )
                 Spacer(Modifier.height(10.dp))
                 OpcaoRadio(
