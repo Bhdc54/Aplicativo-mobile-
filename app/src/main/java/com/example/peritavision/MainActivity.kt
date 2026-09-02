@@ -405,8 +405,9 @@ fun CaptureScreen() {
     // Wi-Fi DOS OCULOS: o JPEG sobe pela rede do oculos, nao pelo Bluetooth.
     var wifiOculos by remember { mutableStateOf(false) }
     var ssidOculos by remember { mutableStateOf<String?>(null) }
-    var wifiSsid by remember { mutableStateOf("") }
-    var wifiSenha by remember { mutableStateOf("") }
+    // Rede do local vem salva (Configurações) e vai sozinha aos óculos ao conectar.
+    var wifiSsid by remember { mutableStateOf(config.wifiSsid) }
+    var wifiSenha by remember { mutableStateOf(config.wifiSenha) }
     // Matrícula: a última que abriu perícia neste tablet (Configurações), ou a
     // de dev do local.properties na primeira vez. Protocolo: sempre vazio.
     var matricula by remember { mutableStateOf(config.ultimaMatricula.ifBlank { MATRICULA_PADRAO }) }
@@ -638,6 +639,19 @@ fun CaptureScreen() {
                     conectado = evento.conectado
                     conectando = false
                     status = if (evento.conectado) "Óculos conectado" else "Óculos desconectado"
+                    // WI-FI AUTOMÁTICO: conectou e há rede salva → envia sem
+                    // pedir nada. Espera 2,5 s para os óculos reportarem o
+                    // estado deles primeiro — se já estiverem nessa rede, não
+                    // reenvia (o envio derruba e religa a conexão).
+                    if (evento.conectado && wifiSsid.isNotBlank()) {
+                        escopo.launch {
+                            delay(2_500)
+                            if (conectado && !wifiOculos) {
+                                status = "Enviando a Wi-Fi salva (${wifiSsid.trim()}) aos óculos..."
+                                (device as? MentraGlassesDevice)?.configurarWifi(wifiSsid.trim(), wifiSenha)
+                            }
+                        }
+                    }
                 }
                 is GlassesEvent.Wifi -> {
                     wifiOculos = evento.conectado
@@ -1043,9 +1057,9 @@ fun CaptureScreen() {
             wifiOculos = wifiOculos,
             ssidOculos = ssidOculos,
             ssid = wifiSsid,
-            onSsid = { wifiSsid = it },
+            onSsid = { wifiSsid = it; config.wifiSsid = it },
             senha = wifiSenha,
-            onSenha = { wifiSenha = it },
+            onSenha = { wifiSenha = it; config.wifiSenha = it },
             onEnviar = {
                 (device as? MentraGlassesDevice)
                     ?.configurarWifi(wifiSsid.trim(), wifiSenha)
@@ -1057,7 +1071,6 @@ fun CaptureScreen() {
             numero = numeroPericia,
             bloqueado = !hardwarePronto,
             destaque = passo == Passo.SESSAO,
-            onAbrirConfiguracoes = { mostrarConfiguracoes = true },
             matricula = matricula,
             onMatricula = { matricula = it },
             // Leitura de lacre agora é PELOS ÓCULOS (o scanner da câmera do
@@ -1339,7 +1352,7 @@ private fun CartaoWifiOculos(
                 "É por esta rede que o JPEG sobe ao servidor."
             } else {
                 "As fotos e o vídeo sobem pelo Wi-Fi DOS ÓCULOS — rede 2,4 GHz com internet. " +
-                    "Envie a rede do local antes de capturar."
+                    "A rede fica salva no tablet e é enviada sozinha toda vez que os óculos conectam."
             }
         )
         Spacer(Modifier.height(10.dp))
@@ -1372,8 +1385,6 @@ private fun CartaoServidor(
     numero: Int,
     bloqueado: Boolean,
     destaque: Boolean,
-    /** óculos/Wi-Fi ficam em Configurações: quando bloqueado, o atalho vai para lá */
-    onAbrirConfiguracoes: () -> Unit,
     onLerLacre: () -> Unit,
     matricula: String,
     onMatricula: (String) -> Unit,
@@ -1409,14 +1420,8 @@ private fun CartaoServidor(
             }
         )
         if (bloqueado && !temSessao) {
-            Spacer(Modifier.height(8.dp))
-            TextoApoio("Óculos desconectados. Conecte-os e envie o Wi-Fi em Configurações.", Tom.ATENCAO)
-            Spacer(Modifier.height(10.dp))
-            BotaoTonal(
-                texto = "Abrir Configurações",
-                icone = R.drawable.ic_pv_ajustes,
-                onClick = onAbrirConfiguracoes,
-            )
+            Spacer(Modifier.height(4.dp))
+            TextoApoio("Óculos desconectados — conecte pela engrenagem, ao lado da logo.", Tom.ATENCAO)
         }
         Spacer(Modifier.height(10.dp))
         if (!temSessao) {
