@@ -71,8 +71,14 @@ import com.example.peritavision.ui.BotaoPrimario
 import com.example.peritavision.ui.BotaoTonal
 import com.example.peritavision.ui.CabecalhoCartao
 import com.example.peritavision.ui.CampoPv
+import com.example.peritavision.ui.BalaoConversa
+import com.example.peritavision.ui.BarraProgresso
+import com.example.peritavision.ui.LinhaCampo
+import com.example.peritavision.ui.SecaoLaudoPv
+import com.example.peritavision.ui.CartaoPasso
 import com.example.peritavision.ui.CartaoPv
-import com.example.peritavision.ui.CartaoRecolhivel
+import com.example.peritavision.ui.MolduraVisor
+import com.example.peritavision.ui.TituloSecao
 import com.example.peritavision.ui.Contador
 import com.example.peritavision.ui.Etiqueta
 import com.example.peritavision.ui.FaixaProntidao
@@ -85,6 +91,7 @@ import com.example.peritavision.ui.TextoApoio
 import com.example.peritavision.ui.Tom
 import com.example.peritavision.voice.VoiceTrigger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -216,6 +223,11 @@ fun CaptureScreen() {
     /** Fala do perito acumulada para a NARRAÇÃO do laudo (tudo vai; o cartão
      *  na tela mostra só as perguntas com o chamado "PeritaVision"). */
     var narracaoPendente by remember { mutableStateOf("") }
+    // NARRAÇÕES DA BANCADA: cópia local do que já foi gravado no backend
+    // (pericia.trecho_narracao). Alimenta, na tela, a seção "Considerações"
+    // do laudo em preenchimento — o laudo final continua sendo montado pelo
+    // servidor no Finalizar. Zera quando uma sessão nova abre.
+    var narracoes by remember { mutableStateOf<List<String>>(emptyList()) }
     var narracaoUltimoMs by remember { mutableStateOf(0L) }
     /** true enquanto a fala em curso contém o chamado — controla a exibição. */
     var falaComChamado by remember { mutableStateOf(false) }
@@ -318,6 +330,7 @@ fun CaptureScreen() {
             val parada = System.currentTimeMillis() - narracaoUltimoMs > 2_000
             if (pronta.isNotBlank() && (parada || pronta.length > 1_500)) {
                 narracaoPendente = ""
+                narracoes = narracoes + pronta.trim()  
                 backend.narrar(id, pronta)
             }
         }
@@ -376,19 +389,6 @@ fun CaptureScreen() {
         }
     }
 
-    // Laudo sendo escrito: depois do finalizar, o backend monta o laudo seção a
-    // seção. Este poll leve (a cada 2s, por ~30s) faz as seções APARECEREM na
-    // tela conforme ficam prontas, em vez de mandar o perito "ver no site".
-    var trechosLaudo by remember { mutableStateOf<List<BackendClient.TrechoLaudo>>(emptyList()) }
-    LaunchedEffect(laudoId) {
-        trechosLaudo = emptyList()
-        val id = laudoId ?: return@LaunchedEffect
-        repeat(15) {
-            runCatching { trechosLaudo = backend.obterLaudo(id) }
-            kotlinx.coroutines.delay(2_000)
-        }
-    }
-
     // ── Leitura de lacre PELOS ÓCULOS ─────────────────────────────────────
     // O perito toca no botão, os óculos fotografam o código de barras, o
     // servidor decodifica e consulta o Atena; a ficha do caso aparece na tela.
@@ -397,6 +397,8 @@ fun CaptureScreen() {
     /** O que o Atena devolveu ao abrir a sessão — vira contexto do assistente IA. */
     var casoAtena by remember { mutableStateOf<BackendClient.CasoAtena?>(null) }
     LaunchedEffect(sessaoId) { if (sessaoId == null) casoAtena = null }
+    // Sessão nova → a lista de narrações da tela começa do zero.
+    LaunchedEffect(sessaoId) { if (sessaoId != null) narracoes = emptyList() }
     /** Texto extraído do PDF da requisição — o que a autoridade pediu. */
     var textoRequisicao by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(casoAtena) {
@@ -552,6 +554,7 @@ fun CaptureScreen() {
                 status = "Finalizando sessão..."
                 // Última fala ainda no buffer entra na narração antes do laudo.
                 if (narracaoPendente.isNotBlank()) {
+                    narracoes = narracoes + narracaoPendente.trim()
                     backend.narrar(id, narracaoPendente)
                     narracaoPendente = ""
                 }
@@ -903,7 +906,7 @@ fun CaptureScreen() {
         podeCapturar -> null
         ehMentra && !conectado -> "Conecte os óculos para liberar a captura."
         !hardwarePronto -> "Conceda as permissões de câmera e microfone."
-        else -> "Abra uma sessão no cartão Servidor — a foto precisa de um token emitido pelo servidor."
+        else -> "Abra a perícia no passo 3 — a foto precisa de um token emitido pelo servidor."
     }
 
     // Tom da barra de status. Derivado da própria mensagem, de propósito: um
@@ -960,8 +963,16 @@ fun CaptureScreen() {
     // Cada cartão vira um "bloco pronto" — o layout de tablet abaixo decide
     // onde cada um entra (preparação em 3 colunas / bancada em 2 painéis),
     // sem duplicar nenhum parâmetro. Design aprovado em 24/08/2026.
+    // Numeração do checklist: Óculos → Wi-Fi → Perícia (no modo PHONE, sem
+    // óculos, são só dois passos: Câmera → Perícia).
+    val numeroPericia = if (ehMentra) 3 else 2
+    val totalPassos = numeroPericia
+    val passosProntos = (if (ehMentra) (if (conectado) 1 else 0) + (if (wifiOculos) 1 else 0)
+        else (if (temPermissoes) 1 else 0)) + (if (temSessao) 1 else 0)
+
     val cartaoOculos: @Composable () -> Unit = {
         CartaoOculos(
+            numero = 1,
             destaque = passo == Passo.CONECTAR,
             ehMentra = ehMentra,
             conectado = conectado,
@@ -972,6 +983,7 @@ fun CaptureScreen() {
     }
     val cartaoWifi: @Composable () -> Unit = {
         if (ehMentra) CartaoWifiOculos(
+            numero = 2,
             destaque = !wifiOculos && conectado,
             conectado = conectado,
             wifiOculos = wifiOculos,
@@ -988,6 +1000,8 @@ fun CaptureScreen() {
     }
     val cartaoServidor: @Composable () -> Unit = {
         CartaoServidor(
+            numero = numeroPericia,
+            bloqueado = !hardwarePronto,
             destaque = passo == Passo.SESSAO,
             matricula = matricula,
             onMatricula = { matricula = it },
@@ -1041,11 +1055,18 @@ fun CaptureScreen() {
     // O que os óculos estão vendo, ao vivo (só no modo MENTRA — no PHONE a
     // pré-visualização da câmera já mora dentro do cartão de captura).
     val cartaoVisao: @Composable () -> Unit = {
-        if (ehMentra) CartaoVisaoOculos(urlFlv = urlVisao, aoVivo = videoLigado)
+        if (ehMentra) CartaoVisaoOculos(urlFlv = urlVisao, aoVivo = videoLigado, protocolo = protocolo.trim())
     }
-    // O laudo sendo escrito pelo backend (o card some enquanto não há laudo).
+    // O laudo em preenchimento: acompanha a sessão, seção a seção, com o que
+    // já se sabe (ATENA, ficha do lacre, fotos seladas, narração do perito).
     val cartaoLaudo: @Composable () -> Unit = {
-        laudoId?.let { CartaoLaudo(trechos = trechosLaudo, montando = trechosLaudo.isEmpty()) }
+        if (temSessao) CartaoLaudoEmPreenchimento(
+            protocolo = protocolo.trim(),
+            caso = casoAtena,
+            ficha = fichaLacre,
+            fotosSeladas = fotosEnviadas,
+            narracoes = narracoes,
+        )
     }
     val cartaoEvidencia: @Composable () -> Unit = {
         ultima?.let { CartaoEvidencia(it) }
@@ -1091,83 +1112,44 @@ fun CaptureScreen() {
         }
         FaixaProntidao(prontidao)
 
-        // ── LAYOUT DE TABLET (design aprovado 24/08/2026) ────────────────
-        // Sem sessão: PREPARAÇÃO — os 3 passos lado a lado (óculos → Wi-Fi →
-        //   abrir a perícia), cada coluna com rolagem própria. O laudo recém-
-        //   gerado aparece na 3ª coluna, embaixo do cartão do servidor.
-        // Com sessão: BANCADA — visão dos óculos + captura no painel esquerdo
-        //   (o maior), evidência e apoio no direito.
-        if (!temSessao) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .imePadding()
-                    .padding(horizontal = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Spacer(Modifier.height(2.dp))
-                    cartaoOculos()
-                }
-                if (ehMentra) {
-                    Column(
-                        modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Spacer(Modifier.height(2.dp))
-                        cartaoWifi()
-                    }
-                }
-                Column(
-                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Spacer(Modifier.height(2.dp))
-                    cartaoFichaLacre()
-                    cartaoServidor()
-                    cartaoAssistente()
-                    cartaoLaudo()
-                    cartaoEvidencia()
-                    RodapeMarca(NOME_EMPRESA)
-                }
+        // ── LAYOUT EM COLUNA ÚNICA (redesenho 01/09/2026) ────────────────
+        // Sem sessão: PREPARAÇÃO — checklist numerado, um passo por vez
+        //   (óculos → Wi-Fi → perícia). Passo concluído recolhe numa linha
+        //   verde; passo ainda bloqueado fica esmaecido.
+        // Com sessão: BANCADA — visor ao vivo, captura selada, assistente,
+        //   custódia. Óculos e Wi-Fi ficam recolhidos no fim, ainda ao alcance.
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Spacer(Modifier.height(2.dp))
+            if (!temSessao) {
+                TituloSecao("Antes de começar", "$passosProntos de $totalPassos prontos")
+                cartaoOculos()
+                cartaoWifi()
+                cartaoFichaLacre()
+                cartaoServidor()
+                cartaoEvidencia()
+            } else {
+                cartaoVisao()
+                cartaoCaptura()
+                cartaoLaudo()
+                cartaoAssistente()
+                cartaoEvidencia()
+                cartaoWifi()
+                cartaoOculos()
             }
-        } else {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .imePadding()
-                    .padding(horizontal = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(
-                    modifier = Modifier.weight(1.3f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Spacer(Modifier.height(2.dp))
-                    cartaoVisao()
-                    cartaoCaptura()
-                }
-                Column(
-                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Spacer(Modifier.height(2.dp))
-                    cartaoAssistente()
-                    cartaoLaudo()
-                    cartaoEvidencia()
-                    cartaoWifi()
-                    cartaoOculos()
-                    RodapeMarca(NOME_EMPRESA)
-                }
-            }
+            RodapeMarca(NOME_EMPRESA)
         }
 
+        // Rodapé de mensagem único: a pílula acompanha o tom do status.
         Column(
             Modifier
-                .background(MaterialTheme.colorScheme.surface)
+                .background(MaterialTheme.colorScheme.background)
                 .navigationBarsPadding()
         ) {
             BarraDeStatus(status, tomStatus)
@@ -1181,6 +1163,7 @@ fun CaptureScreen() {
 
 @Composable
 private fun CartaoOculos(
+    numero: Int,
     destaque: Boolean,
     ehMentra: Boolean,
     conectado: Boolean,
@@ -1192,12 +1175,15 @@ private fun CartaoOculos(
         // Modo de teste: a "muleta" é a câmera do celular. Deixar isso explícito
         // na tela evita a pior confusão possível numa demonstração — achar que
         // está usando os óculos quando não está.
-        CartaoRecolhivel(
-            titulo = "Dispositivo",
-            resumo = "Câmera do celular (modo de teste)",
+        CartaoPasso(
+            numero = numero,
+            titulo = "Câmera do celular",
             etiqueta = if (temPermissoes) "pronto" else "sem permissão",
             tomEtiqueta = if (temPermissoes) Tom.OK else Tom.ERRO,
-            abertoInicial = !temPermissoes,
+            ativo = !temPermissoes,
+            bloqueado = false,
+            concluido = temPermissoes,
+            resumoConcluido = "Modo de teste — a foto é tirada pelo celular",
         ) {
             TextoApoio(
                 "TIPO_DISPOSITIVO está em PHONE. A foto é tirada pelo celular e " +
@@ -1207,40 +1193,29 @@ private fun CartaoOculos(
         return
     }
 
-    if (conectado && !destaque) {
-        CartaoRecolhivel(
-            titulo = "Óculos Mentra Live",
-            resumo = "Conectado por Bluetooth",
-            etiqueta = "conectado",
-            tomEtiqueta = Tom.OK,
-        ) {
-            TextoApoio(
-                "O Bluetooth leva os comandos e o áudio do microfone. A foto sobe " +
-                    "pela Wi-Fi dos óculos."
-            )
-        }
-        return
-    }
-
-    CartaoPv(destaque = destaque) {
-        CabecalhoCartao(
-            titulo = "Óculos Mentra Live",
-            etiqueta = when {
-                conectado -> "conectado"
-                conectando -> "procurando"
-                else -> "desconectado"
-            },
-            tomEtiqueta = when {
-                conectado -> Tom.OK
-                conectando -> Tom.ATENCAO
-                else -> Tom.ERRO
-            },
-        )
+    CartaoPasso(
+        numero = numero,
+        titulo = "Óculos Mentra Live",
+        etiqueta = when {
+            conectado -> "conectado"
+            conectando -> "procurando"
+            else -> "desconectado"
+        },
+        tomEtiqueta = when {
+            conectado -> Tom.OK
+            conectando -> Tom.ATENCAO
+            else -> Tom.ERRO
+        },
+        ativo = destaque,
+        bloqueado = false,
+        concluido = conectado,
+        resumoConcluido = "Conectado por Bluetooth",
+    ) {
         TextoApoio(
             when {
-                conectado -> "Conectado e pronto para capturar."
+                conectado -> "O Bluetooth leva os comandos e o áudio do microfone. A foto sobe pela Wi-Fi dos óculos."
                 conectando -> "Procurando os óculos por Bluetooth..."
-                else -> "Ligue os óculos, deixe-os por perto e toque em conectar."
+                else -> "Ligue os óculos, deixe-os por perto e toque em conectar. É preciso Bluetooth e Localização ativos."
             }
         )
         Spacer(Modifier.height(12.dp))
@@ -1259,6 +1234,7 @@ private fun CartaoOculos(
 
 @Composable
 private fun CartaoWifiOculos(
+    numero: Int,
     destaque: Boolean,
     conectado: Boolean,
     wifiOculos: Boolean,
@@ -1269,19 +1245,29 @@ private fun CartaoWifiOculos(
     onSenha: (String) -> Unit,
     onEnviar: () -> Unit,
 ) {
-    CartaoRecolhivel(
-        titulo = "Wi-Fi dos óculos",
-        resumo = if (wifiOculos) "Rede ${ssidOculos ?: "—"}" else "Sem Wi-Fi — a foto não sobe",
-        etiqueta = if (wifiOculos) "conectado" else "pendente",
-        tomEtiqueta = if (wifiOculos) Tom.OK else Tom.ERRO,
-        abertoInicial = !wifiOculos,
-        destaque = destaque,
+    CartaoPasso(
+        numero = numero,
+        titulo = "Wi-Fi do local",
+        etiqueta = when {
+            wifiOculos -> "conectado"
+            conectado -> "pendente"
+            else -> "aguardando"
+        },
+        tomEtiqueta = when {
+            wifiOculos -> Tom.OK
+            conectado -> Tom.ERRO
+            else -> Tom.NEUTRO
+        },
+        ativo = destaque,
+        bloqueado = !conectado,
+        concluido = wifiOculos,
+        resumoConcluido = "Rede ${ssidOculos ?: "—"}",
     ) {
         TextoApoio(
             if (wifiOculos) {
                 "É por esta rede que o JPEG sobe ao servidor."
             } else {
-                "Fotos e vídeo sobem pelo Wi-Fi DOS ÓCULOS (rede 2.4 GHz com internet). " +
+                "As fotos e o vídeo sobem pelo Wi-Fi DOS ÓCULOS — rede 2,4 GHz com internet. " +
                     "Envie a rede do local antes de capturar."
             }
         )
@@ -1298,6 +1284,7 @@ private fun CartaoWifiOculos(
             onValueChange = onSenha,
             rotulo = "Senha da rede",
             habilitado = conectado,
+            segredo = true,
         )
         Spacer(Modifier.height(12.dp))
         BotaoTonal(
@@ -1311,6 +1298,8 @@ private fun CartaoWifiOculos(
 
 @Composable
 private fun CartaoServidor(
+    numero: Int,
+    bloqueado: Boolean,
     destaque: Boolean,
     onLerLacre: () -> Unit,
     matricula: String,
@@ -1329,12 +1318,16 @@ private fun CartaoServidor(
     // captura — este cartão simplesmente sai da frente.
     if (temSessao && !destaque) return
 
-    CartaoPv(destaque = destaque) {
-        CabecalhoCartao(
-            titulo = "Perícia",
-            etiqueta = if (temSessao) "sessão aberta" else "entrar",
-            tomEtiqueta = if (temSessao) Tom.OK else Tom.NEUTRO,
-        )
+    CartaoPasso(
+        numero = numero,
+        titulo = "Perícia",
+        etiqueta = if (temSessao) "sessão aberta" else "ATENA",
+        tomEtiqueta = if (temSessao) Tom.OK else Tom.NEUTRO,
+        ativo = destaque,
+        bloqueado = bloqueado && !temSessao,
+        concluido = temSessao,
+        resumoConcluido = "Protocolo ${protocolo.trim()}",
+    ) {
         TextoApoio(
             if (temSessao) {
                 "Sessão aberta. Finalizar manda o backend montar o laudo."
@@ -1349,38 +1342,42 @@ private fun CartaoServidor(
             // e esta matrícula diz de quem é a perícia. É ela que separa os
             // laudos por perito no painel. A senha existe onde importa: no
             // painel web, para revisar e validar o laudo.
-            CampoPv(
-                valor = matricula,
-                onValueChange = onMatricula,
-                rotulo = "Matrícula do perito",
-                habilitado = editavel,
-            )
-            Spacer(Modifier.height(9.dp))
-            CampoPv(
-                valor = protocolo,
-                onValueChange = onProtocolo,
-                rotulo = "Nº do protocolo (ATENA)",
-                habilitado = editavel,
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CampoPv(
+                    valor = matricula,
+                    onValueChange = onMatricula,
+                    rotulo = "Matrícula",
+                    habilitado = editavel && !bloqueado,
+                    modifier = Modifier.weight(0.7f),
+                )
+                CampoPv(
+                    valor = protocolo,
+                    onValueChange = onProtocolo,
+                    rotulo = "Protocolo",
+                    habilitado = editavel && !bloqueado,
+                    modifier = Modifier.weight(1f),
+                )
+            }
             Spacer(Modifier.height(12.dp))
             BotaoPrimario(
                 texto = if (ocupado) "Sincronizando com o ATENA..." else "Iniciar perícia",
                 icone = R.drawable.ic_pv_play,
-                habilitado = !ocupado,
+                habilitado = !ocupado && !bloqueado && protocolo.isNotBlank(),
                 onClick = onIniciar,
             )
             Spacer(Modifier.height(8.dp))
             BotaoContorno(
-                texto = "Ler lacre (código de barras)",
+                texto = "Ler lacre (QR do envelope)",
                 icone = R.drawable.ic_pv_camera,
-                habilitado = !ocupado,
+                habilitado = !ocupado && !bloqueado,
                 onClick = onLerLacre,
             )
         } else {
             BotaoContorno(
-                texto = if (ocupado) "Finalizando..." else "Finalizar sessão (gera laudo)",
-                icone = R.drawable.ic_pv_stop,
+                texto = if (ocupado) "Finalizando..." else "Finalizar sessão e gerar laudo",
+                icone = R.drawable.ic_pv_custodia,
                 habilitado = !ocupado,
+                tom = Tom.ERRO,
                 onClick = onFinalizar,
             )
         }
@@ -1420,11 +1417,12 @@ private fun CartaoCaptura(
             titulo = "Captura de evidência",
             etiqueta = if (podeCapturar) "liberada" else "bloqueada",
             tomEtiqueta = if (podeCapturar) Tom.OK else Tom.NEUTRO,
+            grande = true,
         )
         if (motivoBloqueio != null) {
             TextoApoio(motivoBloqueio)
         } else if (fotosEnviadas > 0) {
-            Contador(fotosEnviadas, "fotos enviadas e seladas")
+            Contador(fotosEnviadas, "fotos enviadas\ne seladas por hash")
         } else {
             TextoApoio(
                 if (assistenteIa) {
@@ -1441,7 +1439,8 @@ private fun CartaoCaptura(
             previewCamera()
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
+        // O maior alvo da tela: é o botão que o dedo procura com a luva.
         BotaoPrimario(
             texto = "Tirar foto",
             icone = R.drawable.ic_pv_camera,
@@ -1459,25 +1458,26 @@ private fun CartaoCaptura(
             AvisoEscuta(
                 titulo = if (ouvindoPelosOculos) "Óculos ouvindo" else "Celular ouvindo",
                 detalhe = "diga \"capturar\" ou \"finalizar\"",
+                acao = "Parar voz",
+                onAcao = onVoz,
             )
         }
 
         Spacer(Modifier.height(9.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            // O botão de palavras soltas só aparece SEM assistente: com ele
-            // ligado, os dois disputavam o mesmo comando.
-            if (!assistenteIa) {
+            // O botão de palavras soltas só aparece SEM assistente e enquanto a
+            // voz está parada: ligada, o "Parar voz" mora no aviso vermelho acima.
+            if (!assistenteIa && !vozAtiva) {
                 BotaoContorno(
-                    texto = if (vozAtiva) "Parar voz" else "Comando de voz",
+                    texto = "Comando de voz",
                     icone = R.drawable.ic_pv_mic,
                     habilitado = podeCapturar,
-                    tom = if (vozAtiva) Tom.ERRO else Tom.NEUTRO,
                     modifier = Modifier.weight(1f),
                     onClick = onVoz,
                 )
             }
             BotaoContorno(
-                texto = if (gravandoAudio) "Parar" else "Narração",
+                texto = if (gravandoAudio) "Parar narração" else "Narração",
                 icone = if (gravandoAudio) R.drawable.ic_pv_stop else R.drawable.ic_pv_mic,
                 habilitado = podeCapturar,
                 tom = if (gravandoAudio) Tom.ERRO else Tom.NEUTRO,
@@ -1488,9 +1488,10 @@ private fun CartaoCaptura(
         if (onFinalizar != null) {
             Spacer(Modifier.height(12.dp))
             BotaoContorno(
-                texto = if (finalizando) "Finalizando..." else "Finalizar sessão (gera laudo)",
-                icone = R.drawable.ic_pv_stop,
+                texto = if (finalizando) "Finalizando..." else "Finalizar sessão e gerar laudo",
+                icone = R.drawable.ic_pv_custodia,
                 habilitado = !finalizando,
+                tom = Tom.ERRO,
                 onClick = onFinalizar,
             )
         }
@@ -1498,95 +1499,165 @@ private fun CartaoCaptura(
 }
 
 @Composable
-private fun CartaoVisaoOculos(urlFlv: String?, aoVivo: Boolean) {
-    CartaoPv {
-        CabecalhoCartao(
-            titulo = "Visão dos óculos",
-            etiqueta = if (aoVivo && urlFlv != null) "ao vivo" else "sem vídeo",
-            tomEtiqueta = if (aoVivo && urlFlv != null) Tom.OK else Tom.NEUTRO,
-        )
-        if (urlFlv == null || !aoVivo) {
-            TextoApoio("O vídeo dos óculos aparece aqui, ao vivo, assim que a sessão abrir e a transmissão começar.")
-            return@CartaoPv
+private fun CartaoVisaoOculos(urlFlv: String?, aoVivo: Boolean, protocolo: String) {
+    val transmitindo = aoVivo && urlFlv != null
+
+    // Cronômetro da transmissão: zera quando a URL muda (nova sessão).
+    var segundos by remember(urlFlv) { mutableIntStateOf(0) }
+    LaunchedEffect(urlFlv, transmitindo) {
+        while (transmitindo) {
+            delay(1000)
+            segundos++
         }
-        val context = LocalContext.current
-        // Player recriado quando a URL muda (nova sessão) e liberado quando o
-        // cartão sai de cena — sem isso o decodificador fica preso em segundo plano.
-        val player = remember(urlFlv) {
-            androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
-                setMediaItem(androidx.media3.common.MediaItem.fromUri(urlFlv))
-                // O monitor é só visual: com o áudio ligado, o tablet toca a
-                // voz do perito de volta (eco) e alimenta o loop em que a IA
-                // se ouve. Vídeo segue normal; áudio fica mudo.
-                volume = 0f
-                prepare()
-                playWhenReady = true
-            }
-        }
-        DisposableEffect(player) { onDispose { player.release() } }
-        Spacer(Modifier.height(10.dp))
-        AndroidView(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(220.dp)
-                .clip(MaterialTheme.shapes.small),
-            factory = { ctx ->
-                androidx.media3.ui.PlayerView(ctx).apply {
-                    useController = false
-                    this.player = player
-                }
-            },
-        )
-        Spacer(Modifier.height(6.dp))
-        TextoApoio("Atraso de alguns segundos é normal (o vídeo passa pelo servidor).")
     }
+    val cronometro = "%02d:%02d".format(segundos / 60, segundos % 60)
+
+    val player: (@Composable () -> Unit)? = if (!transmitindo) null else {
+        {
+            val context = LocalContext.current
+            // Player recriado quando a URL muda (nova sessão) e liberado quando o
+            // cartão sai de cena — sem isso o decodificador fica preso em segundo plano.
+            val exo = remember(urlFlv) {
+                androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
+                    setMediaItem(androidx.media3.common.MediaItem.fromUri(urlFlv!!))
+                    // O monitor é só visual: com o áudio ligado, o tablet toca a
+                    // voz do perito de volta (eco) e alimenta o loop em que a IA
+                    // se ouve. Vídeo segue normal; áudio fica mudo.
+                    volume = 0f
+                    prepare()
+                    playWhenReady = true
+                }
+            }
+            DisposableEffect(exo) { onDispose { exo.release() } }
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    androidx.media3.ui.PlayerView(ctx).apply {
+                        useController = false
+                        this.player = exo
+                    }
+                },
+                update = { view -> view.player = exo },
+            )
+        }
+    }
+
+    MolduraVisor(
+        aoVivo = transmitindo,
+        cronometro = cronometro,
+        fonte = "MENTRA LIVE · 1080p",
+        protocolo = if (protocolo.isBlank()) "" else "PROT $protocolo",
+        legenda = if (transmitindo) {
+            "Atraso de alguns segundos é normal — o vídeo passa pelo servidor."
+        } else {
+            "O vídeo dos óculos aparece aqui, ao vivo, assim que a transmissão começar."
+        },
+        conteudo = player,
+    )
 }
 
+/** Uma seção do laudo em preenchimento, já resolvida para a tela. */
+private data class SecaoLaudo(
+    val numero: Int,
+    val titulo: String,
+    val preenchida: Boolean,
+    val dica: String? = null,
+    val campos: List<Pair<String, String>> = emptyList(),
+    val itens: List<String> = emptyList(),
+)
+
+/**
+ * Laudo pericial em preenchimento — as 8 seções do modelo POLITEC-MT, com o
+ * que a sessão já sabe. Seções 1–3 vêm do ATENA (ou da ficha do lacre) na
+ * abertura; 5 e 6 crescem com as fotos seladas e a narração do perito; 4, 7 e
+ * 8 ficam pendentes até a revisão no painel. É acompanhamento: o laudo de
+ * verdade continua sendo montado pelo servidor no Finalizar.
+ */
 @Composable
-private fun CartaoLaudo(trechos: List<BackendClient.TrechoLaudo>, montando: Boolean) {
+private fun CartaoLaudoEmPreenchimento(
+    protocolo: String,
+    caso: BackendClient.CasoAtena?,
+    ficha: BackendClient.FichaLacre?,
+    fotosSeladas: Int,
+    narracoes: List<String>,
+) {
+    val autoridade = caso?.autoridade ?: ficha?.solicitante
+    val orgao = caso?.unidadeRequisitante ?: ficha?.unidadeRequisitante
+    val dataOcorrencia = caso?.dataOcorrencia ?: ficha?.dataOcorrencia
+    val vitima = ficha?.vitima
+    val materiais = caso?.materiais?.ifEmpty { null } ?: ficha?.materiais ?: emptyList()
+    val objetivos = caso?.exames?.ifEmpty { null }
+        ?: caso?.naturezas?.ifEmpty { null }
+        ?: ficha?.naturezas ?: emptyList()
+
+    val historico = buildList {
+        autoridade?.let { add("Autoridade" to it) }
+        orgao?.let { add("Órgão solicitante" to it) }
+        dataOcorrencia?.let { add("Data da ocorrência" to it) }
+        vitima?.let { add("Vítima" to it) }
+    }
+
+    val secoes = listOf(
+        SecaoLaudo(1, "Histórico", preenchida = historico.isNotEmpty(),
+            dica = "Vem do ATENA ao abrir a perícia.", campos = historico),
+        SecaoLaudo(2, "Materiais recebidos", preenchida = materiais.isNotEmpty(),
+            dica = "Vem do ATENA ao abrir a perícia.", itens = materiais),
+        SecaoLaudo(3, "Objetivos dos exames", preenchida = objetivos.isNotEmpty(),
+            dica = "Vem do ATENA ao abrir a perícia.", itens = objetivos),
+        SecaoLaudo(4, "Materiais e métodos", preenchida = false,
+            dica = "Redigida na revisão do laudo, a partir do método padrão."),
+        SecaoLaudo(5, "Resultados", preenchida = fotosSeladas > 0,
+            dica = "As fotos que você selar entram aqui como figuras.",
+            campos = listOf("Figuras" to "$fotosSeladas foto(s) selada(s) por hash")),
+        SecaoLaudo(6, "Considerações", preenchida = narracoes.isNotEmpty(),
+            dica = "O que você narrar na bancada entra aqui.",
+            itens = narracoes.takeLast(3).map { if (it.length > 180) it.take(180) + "…" else it }),
+        SecaoLaudo(7, "Conclusão", preenchida = false,
+            dica = "Só o perito escreve — no painel web, na revisão."),
+        SecaoLaudo(8, "Disposições finais", preenchida = false,
+            dica = "Texto padrão do modelo, incluído na geração."),
+    )
+    val preenchidas = secoes.count { it.preenchida }
+    val pct = preenchidas * 100 / secoes.size
+
     CartaoPv {
         CabecalhoCartao(
-            titulo = "Laudo",
-            etiqueta = if (montando) "escrevendo..." else "rascunho pronto",
-            tomEtiqueta = if (montando) Tom.ATENCAO else Tom.OK,
+            titulo = "Laudo pericial — em preenchimento",
+            etiqueta = "$pct%",
+            tomEtiqueta = if (pct >= 100) Tom.OK else Tom.ATENCAO,
+            grande = true,
         )
-        if (montando) {
-            TextoApoio("O servidor está montando o laudo com o que foi capturado e narrado — as seções aparecem aqui conforme ficam prontas.")
-            return@CartaoPv
-        }
-        Spacer(Modifier.height(6.dp))
-        trechos.forEach { t ->
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 10.dp)
-                    .clip(MaterialTheme.shapes.small)
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(13.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "SEÇÃO ${t.secao} · ${t.titulo.uppercase()}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = PvTheme.extras.textoSuave,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // Cor = origem, igual ao painel web: perito confirma (verde),
-                    // rascunho da IA pede revisão (âmbar), Atena é dado de entrada.
-                    Etiqueta(
-                        texto = when (t.origem) { "ia" -> "Rascunho IA"; "perito" -> "Perito"; else -> "Atena" },
-                        tom = when (t.origem) { "ia" -> Tom.ATENCAO; "perito" -> Tom.OK; else -> Tom.NEUTRO },
-                    )
+        Text(
+            "Protocolo ${protocolo.ifBlank { "—" }} · modelo POLITEC-MT",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+        Spacer(Modifier.height(12.dp))
+        BarraProgresso(pct / 100f)
+        Spacer(Modifier.height(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            secoes.forEach { sec ->
+                SecaoLaudoPv(
+                    numero = sec.numero,
+                    titulo = sec.titulo,
+                    preenchida = sec.preenchida,
+                    dica = sec.dica,
+                ) {
+                    sec.campos.forEach { (rotulo, valor) -> LinhaCampo(rotulo, valor) }
+                    sec.itens.forEach { item ->
+                        Text(
+                            "• $item",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(vertical = 3.dp),
+                        )
+                    }
                 }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    t.texto,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
-        TextoApoio("Revisão e assinatura continuam no painel — aqui é acompanhamento.")
+        Spacer(Modifier.height(10.dp))
+        TextoApoio("Ao finalizar, o servidor monta o laudo com tudo isso — revisão e assinatura ficam no painel.")
     }
 }
 
@@ -1600,6 +1671,7 @@ private fun CartaoFichaLacre(
     CartaoPv {
         CabecalhoCartao(
             titulo = "Lacre lido pelos óculos",
+            grande = true,
             etiqueta = ficha.codigo,
             tomEtiqueta = Tom.OK,
         )
@@ -1671,21 +1743,22 @@ private fun CartaoAssistenteIa(
 ) {
     CartaoPv {
         CabecalhoCartao(
-            titulo = "Assistente IA (teste)",
-            // Três estados de verdade, não dois: desligado / câmera pronta mas
-            // em repouso (o normal, e é o que economiza) / olhando agora.
+            titulo = "Assistente de voz",
+            // Estados de verdade, não dois: desligado / ativo (câmera em
+            // repouso, o normal) / olhando agora / sem imagem.
             etiqueta = when {
                 !ativo -> "desligado"
                 olhandoAgora -> "olhando agora"
-                enxergando -> "câmera pronta"
+                enxergando -> "ativo"
                 else -> "sem imagem"
             },
             tomEtiqueta = when {
                 !ativo -> Tom.NEUTRO
                 olhandoAgora -> Tom.OK
-                enxergando -> Tom.NEUTRO
+                enxergando -> Tom.OK
                 else -> Tom.ATENCAO
             },
+            grande = true,
         )
         if (!ativo) {
             TextoApoio(
@@ -1693,53 +1766,33 @@ private fun CartaoAssistenteIa(
                     "abre; aqui você religa se tiver desligado. Uma cópia do áudio vai aos " +
                     "servidores do Google — use apenas em teste/bancada, não em caso real.",
             )
-            Spacer(Modifier.height(10.dp))
-            BotaoContorno(texto = "Ligar assistente", onClick = onAlternar)
+            Spacer(Modifier.height(12.dp))
+            BotaoTonal(texto = "Ligar assistente", icone = R.drawable.ic_pv_mic, onClick = onAlternar)
             return@CartaoPv
         }
-        Spacer(Modifier.height(8.dp))
         if (!enxergando) {
             TextoApoio(
                 "Sem imagem dos óculos: o assistente ouve, mas NÃO está vendo a bancada — " +
                     "não confie no que ele disser sobre o material.",
+                Tom.ATENCAO,
             )
-            Spacer(Modifier.height(8.dp))
-        } else if (!olhandoAgora) {
-            TextoApoio(
-                "A câmera está pronta, mas em repouso — ele ouve tudo e só OLHA quando você " +
-                    "pedir (\"PeritaVision, o que tenho na mão?\" ou um pedido de foto).",
-            )
-            Spacer(Modifier.height(8.dp))
         }
-        if (perito.isNotBlank()) {
-            Text(
-                "Você: $perito",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(6.dp))
-        }
-        if (resposta.isNotBlank()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.small)
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(12.dp),
-            ) {
-                Text(
-                    resposta,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-        }
+        Spacer(Modifier.height(8.dp))
+        if (perito.isNotBlank()) BalaoConversa(perito, doPerito = true)
+        if (resposta.isNotBlank()) BalaoConversa(resposta, doPerito = false)
         if (perito.isBlank() && resposta.isBlank()) {
-            TextoApoio("Ouvindo pelos óculos — pergunte em voz alta (ex.: \"qual o próximo passo do método?\").")
-            Spacer(Modifier.height(8.dp))
+            TextoApoio(
+                "Ouvindo pelos óculos — pergunte em voz alta (ex.: \"qual o próximo passo do método?\"). " +
+                    "Ele só OLHA quando você pedir.",
+            )
         }
-        BotaoContorno(texto = "Desligar assistente", onClick = onAlternar)
+        Spacer(Modifier.height(12.dp))
+        BotaoContorno(
+            texto = "Desligar assistente",
+            icone = R.drawable.ic_pv_stop,
+            tom = Tom.ERRO,
+            onClick = onAlternar,
+        )
     }
 }
 
@@ -1748,6 +1801,7 @@ private fun CartaoEvidencia(ev: Evidencia) {
     CartaoPv {
         CabecalhoCartao(
             titulo = "Última evidência",
+            grande = true,
             etiqueta = "selada",
             tomEtiqueta = Tom.OK,
         )
