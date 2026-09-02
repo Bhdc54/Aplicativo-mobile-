@@ -62,6 +62,8 @@ import com.example.peritavision.domain.SelarCustodia
 import com.example.peritavision.domain.TipoEvidencia
 import com.example.peritavision.net.AudioStreamer
 import com.example.peritavision.net.PonteGemini
+import com.example.peritavision.data.ConfiguracoesApp
+import com.example.peritavision.ui.TelaConfiguracoes
 import com.example.peritavision.net.BackendClient
 import com.example.peritavision.ui.AvisoEscuta
 import com.example.peritavision.ui.BarraDeStatus
@@ -212,6 +214,13 @@ fun CaptureScreen() {
     // (Declarado antes do VoiceTrigger porque as falas do app consultam
     // ponteGemini — função/variável local só é visível abaixo da declaração.)
     var ponteGemini by remember { mutableStateOf<PonteGemini?>(null) }
+    // Aba Configurações (engrenagem): roteiro fixo ou "perguntar", e modelo.
+    val config = remember { ConfiguracoesApp(context) }
+    var mostrarConfiguracoes by remember { mutableStateOf(false) }
+    /** Roteiro em uso na sessão de trabalho ("Trilha A — Faca…"); null = ainda
+     *  não definido (a IA está perguntando, ou o assistente está desligado). */
+    var iaTrilha by remember { mutableStateOf<String?>(null) }
+    var iaPerguntandoTrilha by remember { mutableStateOf(false) }
     var iaPerito by remember { mutableStateOf("") }
     /** Quando a última captura foi disparada (qualquer via). Trava a FOTO EM
      *  DOBRO: a frase "assistente, capture uma foto disso" contém a palavra
@@ -287,8 +296,30 @@ fun CaptureScreen() {
             status = "Assistente IA: configure pv.ponte no local.properties."
             return
         }
-        val ponte = PonteGemini(BuildConfig.PV_PONTE_URL, sessaoId ?: "bancada-teste")
+        val ponte = PonteGemini(
+            BuildConfig.PV_PONTE_URL,
+            sessaoId ?: "bancada-teste",
+            modelo = config.modelo,
+            trilha = config.trilhaParaPonte(),
+        )
         ponte.onStatus = { msg -> status = msg }
+        // Triagem: a IA vai perguntar "objeto cortante ou peça íntima?".
+        ponte.onTriagem = { iaPerguntandoTrilha = true; iaTrilha = null }
+        // Trilha definida: a sessão de trabalho está de pé com o roteiro certo.
+        // Fica no cartão e vai para a trilha de auditoria da sessão (evento
+        // 'sistema'), para o laudo e o histórico saberem qual roteiro guiou.
+        ponte.onTrilha = { id, nome, origem ->
+            iaPerguntandoTrilha = false
+            iaTrilha = if (id == "nenhuma") nome else "Trilha ${id.uppercase()} — $nome"
+            status = when (origem) {
+                "perito" -> "Roteiro definido pelo perito: $nome."
+                "memoria" -> "Sessão retomada — roteiro mantido: $nome."
+                else -> "Roteiro fixado em Configurações: $nome."
+            }
+            sessaoId?.let { sid ->
+                escopo.launch { backend.registrarEvento(sid, "sistema", "trilha:$id", "ponte:$origem") }
+            }
+        }
         // As transcrições chegam em PEDAÇOS (streaming): acumula em vez de
         // substituir — antes cada pedacinho apagava o anterior e o texto
         // "passava correndo" na tela. Fala nova do perito (primeiro pedaço
@@ -342,6 +373,8 @@ fun CaptureScreen() {
             ativa.encerrar()
             ponteGemini = null
             iaEnxergando = false
+            iaTrilha = null
+            iaPerguntandoTrilha = false
             iaDesligadaManual = true // o TTS reassume as falas da bancada
             status = "Assistente IA desligado."
             return
@@ -363,6 +396,8 @@ fun CaptureScreen() {
             iaPerito = ""
             iaResposta = ""
             iaEnxergando = false
+            iaTrilha = null
+            iaPerguntandoTrilha = false
         }
     }
 
@@ -1095,12 +1130,15 @@ fun CaptureScreen() {
             ativo = ponteGemini != null,
             enxergando = iaEnxergando,
             olhandoAgora = iaOlhandoAgora,
+            trilha = iaTrilha,
+            perguntandoTrilha = iaPerguntandoTrilha,
             perito = iaPerito,
             resposta = iaResposta,
             onAlternar = { alternarAssistenteIa() },
         )
     }
 
+    Box(Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1117,6 +1155,7 @@ fun CaptureScreen() {
                 titulo = "PeritaVision",
                 subtitulo = if (temSessao) "Protocolo ${protocolo.trim()} · sessão aberta" else SLOGAN_APP,
                 logo = R.drawable.logo_politec,
+                onConfiguracoes = { mostrarConfiguracoes = true },
             )
         }
         FaixaProntidao(prontidao)
@@ -1163,6 +1202,16 @@ fun CaptureScreen() {
         ) {
             BarraDeStatus(status, tomStatus)
         }
+    }
+    // Configurações POR CIMA da bancada (ver comentário do Box): a sessão, os
+    // efeitos e o assistente continuam vivos enquanto o perito mexe aqui.
+    if (mostrarConfiguracoes) {
+        TelaConfiguracoes(
+            config = config,
+            urlPonte = BuildConfig.PV_PONTE_URL,
+            onVoltar = { mostrarConfiguracoes = false },
+        )
+    }
     }
 }
 
@@ -1746,6 +1795,10 @@ private fun CartaoAssistenteIa(
     enxergando: Boolean,
     /** a IA está REALMENTE olhando agora (janela aberta por pedido do perito) */
     olhandoAgora: Boolean,
+    /** roteiro em uso ("Trilha A — Faca / perfurocortante"); null = indefinido */
+    trilha: String?,
+    /** a IA está na triagem, perguntando o tipo de exame ao perito */
+    perguntandoTrilha: Boolean,
     perito: String,
     resposta: String,
     onAlternar: () -> Unit,
@@ -1778,6 +1831,15 @@ private fun CartaoAssistenteIa(
             Spacer(Modifier.height(12.dp))
             BotaoTonal(texto = "Ligar assistente", icone = R.drawable.ic_pv_mic, onClick = onAlternar)
             return@CartaoPv
+        }
+        // Roteiro: qual prompt está guiando esta sessão (definido na triagem
+        // pela voz do perito, fixado em Configurações, ou mantido da memória).
+        when {
+            perguntandoTrilha -> TextoApoio(
+                "Perguntando o tipo de exame — responda em voz alta: \"objeto cortante\" ou \"peça íntima\".",
+                Tom.ATENCAO,
+            )
+            trilha != null -> LinhaCampo("Roteiro", trilha)
         }
         if (!enxergando) {
             TextoApoio(

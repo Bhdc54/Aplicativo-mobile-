@@ -89,6 +89,8 @@ fun BarraDeTopo(
     titulo: String,
     subtitulo: String,
     @DrawableRes logo: Int,
+    /** Engrenagem à direita do título: abre a aba Configurações. null = sem botão. */
+    onConfiguracoes: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -127,7 +129,25 @@ fun BarraDeTopo(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(Modifier.width(11.dp))
+        if (onConfiguracoes != null) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onConfiguracoes),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_pv_ajustes),
+                    contentDescription = "Configurações",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+        } else {
+            Spacer(Modifier.width(11.dp))
+        }
         // Facil Mova: do outro lado, numa pílula de contorno.
         Box(
             modifier = Modifier

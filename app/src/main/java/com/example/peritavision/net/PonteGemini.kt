@@ -14,6 +14,8 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
+import com.example.peritavision.data.CatalogoPonte
+import com.example.peritavision.data.TrilhaCatalogo
 
 /**
  * PONTE DE BANCADA COM O GEMINI LIVE — protótipo da Frente 5 do roadmap.
@@ -44,8 +46,18 @@ import org.json.JSONObject
 class PonteGemini(
     private val url: String,
     private val sessaoId: String,
+    /** Modelo Gemini Live escolhido em Configurações; vazio = padrão da ponte. */
+    private val modelo: String = "",
+    /** Trilha fixada em Configurações (id do catálogo); null = a IA pergunta
+     *  ao perito na abertura ("objeto cortante ou peça íntima?"). */
+    private val trilha: String? = null,
 ) {
     var onTranscricao: (String) -> Unit = {}
+    /** A ponte abriu a sessão de TRIAGEM: a IA vai perguntar a trilha. */
+    var onTriagem: () -> Unit = {}
+    /** Trilha definida (id, nome, origem 'perito'|'app'|'memoria'): a sessão
+     *  de trabalho está de pé com o roteiro certo. */
+    var onTrilha: (id: String, nome: String, origem: String) -> Unit = { _, _, _ -> }
     var onResposta: (String) -> Unit = {}
     var onStatus: (String) -> Unit = {}
     /** Chamado quando o servidor confirma que o vídeo dos óculos chegou ao
@@ -152,9 +164,10 @@ class PonteGemini(
         val pedido = Request.Builder().url(url).build()
         ws = cliente.newWebSocket(pedido, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                webSocket.send(
-                    JSONObject().put("tipo", "iniciar").put("sessaoId", sessaoId).toString(),
-                )
+                val iniciar = JSONObject().put("tipo", "iniciar").put("sessaoId", sessaoId)
+                if (modelo.isNotBlank()) iniciar.put("modelo", modelo)
+                if (!trilha.isNullOrBlank()) iniciar.put("trilha", trilha)
+                webSocket.send(iniciar.toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -163,7 +176,11 @@ class PonteGemini(
                 when (msg.optString("tipo")) {
                     "pronto" -> {
                         pronto = true
-                        onStatus("Assistente IA pronto — pode falar.")
+                        val etapa = msg.optString("etapa")
+                        onStatus(
+                            if (etapa == "triagem") "Assistente IA pronto — vai perguntar o tipo de exame."
+                            else "Assistente IA pronto — pode falar.",
+                        )
                         // O que ficou guardado antes da sessão abrir vai agora
                         // (e vai DE NOVO a cada reconexão — sessão nova no
                         // Gemini não lembra da anterior).
@@ -174,6 +191,8 @@ class PonteGemini(
                     "textoResposta" -> onResposta(msg.optString("texto"))
                     "videoAtivo" -> onVideoAtivo()
                     "visao" -> onVisao(msg.optBoolean("ativa"))
+                    "triagem" -> onTriagem()
+                    "trilha" -> onTrilha(msg.optString("trilha"), msg.optString("nome"), msg.optString("origem"))
                     "comando" -> onComando(msg.optString("id"), msg.optString("nome"))
                     "erro" -> onStatus("Assistente IA: ${msg.optString("mensagem")}")
                 }
@@ -287,5 +306,54 @@ class PonteGemini(
         runCatching { track?.stop(); track?.release() }
     }
 
-    companion object { private const val TAG = "PonteGemini" }
+    companion object {
+        private const val TAG = "PonteGemini"
+
+        /**
+         * Busca o CATÁLOGO da ponte (trilhas e modelos) para a aba
+         * Configurações: abre uma conexão curta, manda {tipo:'catalogo'},
+         * lê a resposta e fecha. Não abre sessão Gemini. `aoTerminar` recebe
+         * null se a ponte não respondeu (fora do alcance, URL vazia...).
+         */
+        fun buscarCatalogo(url: String, aoTerminar: (CatalogoPonte?) -> Unit) {
+            if (url.isBlank()) { aoTerminar(null); return }
+            val cliente = OkHttpClient.Builder()
+                .connectTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            var respondeu = false
+            val terminar = { c: CatalogoPonte? ->
+                if (!respondeu) { respondeu = true; aoTerminar(c) }
+            }
+            val socket = cliente.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    webSocket.send(JSONObject().put("tipo", "catalogo").toString())
+                }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
+                    if (msg.optString("tipo") != "catalogo") return
+                    val trilhas = buildList {
+                        val arr = msg.optJSONArray("trilhas") ?: org.json.JSONArray()
+                        for (i in 0 until arr.length()) {
+                            val t = arr.getJSONObject(i)
+                            add(TrilhaCatalogo(t.optString("id"), t.optString("nome"), t.optString("descricao")))
+                        }
+                    }
+                    val modelos = buildList {
+                        val arr = msg.optJSONArray("modelos") ?: org.json.JSONArray()
+                        for (i in 0 until arr.length()) add(arr.getString(i))
+                    }
+                    terminar(CatalogoPonte(trilhas, modelos, msg.optString("modeloPadrao")))
+                    webSocket.close(1000, "catálogo recebido")
+                }
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.w(TAG, "catálogo indisponível: ${t.message}")
+                    terminar(null)
+                }
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { terminar(null) }
+            })
+            // Cinto de segurança: ponte muda, não respondeu → devolve null.
+            Handler(Looper.getMainLooper()).postDelayed({ terminar(null); runCatching { socket.cancel() } }, 5_000)
+        }
+    }
 }
