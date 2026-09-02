@@ -129,7 +129,14 @@ class BackendClient(var baseUrl: String) {
         return a.getJSONObject(0).getString("id")
     }
 
-    data class SessaoAberta(val sessaoId: String, val rtmpUrl: String?)
+    data class SessaoAberta(
+        val sessaoId: String,
+        val rtmpUrl: String?,
+        /** true = o backend achou uma sessão ainda aberta deste caso/perito e a devolveu (retomada). */
+        val retomada: Boolean = false,
+        /** fotos já recebidas nessa sessão, para o contador continuar de onde parou. */
+        val fotosRecebidas: Int = 0,
+    )
 
     /** @param matriculaPerito quem está na bancada — separa os laudos por perito. */
     suspend fun abrirSessao(casoId: String, perfilId: String, matriculaPerito: String): SessaoAberta {
@@ -138,7 +145,12 @@ class BackendClient(var baseUrl: String) {
         val r = postJson("/v1/sessoes", corpo)
         val id = r.optString("sessaoId").takeIf { it.isNotBlank() }
             ?: throw BackendException("sessao sem id: $r")
-        return SessaoAberta(id, r.optString("rtmpUrl").takeIf { it.isNotBlank() })
+        return SessaoAberta(
+            sessaoId = id,
+            rtmpUrl = r.optString("rtmpUrl").takeIf { it.isNotBlank() },
+            retomada = r.optBoolean("retomada", false),
+            fotosRecebidas = r.optInt("fotosRecebidas", 0),
+        )
     }
 
     /**

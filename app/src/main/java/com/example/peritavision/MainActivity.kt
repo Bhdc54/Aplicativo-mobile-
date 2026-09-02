@@ -526,10 +526,19 @@ fun CaptureScreen() {
                 val aberta = backend.abrirSessao(caso.id, perfilId, matricula.trim())
                 sessaoId = aberta.sessaoId
                 rtmpUrl = aberta.rtmpUrl
-                falarSeSemIa("Sessão iniciada. Pode capturar.")
                 laudoId = null
-                fotosEnviadas = 0
-                status = "Sessão aberta — pode capturar"
+                if (aberta.retomada) {
+                    // O backend achou a sessão que ficou aberta (app caiu, tablet
+                    // reiniciou): a perícia continua nela, com as fotos que já
+                    // estavam lá — e vai gerar UM laudo só.
+                    fotosEnviadas = aberta.fotosRecebidas
+                    falarSeSemIa("Sessão retomada. Pode continuar de onde parou.")
+                    status = "Sessão retomada — ${aberta.fotosRecebidas} foto(s) já na perícia; pode continuar"
+                } else {
+                    fotosEnviadas = 0
+                    falarSeSemIa("Sessão iniciada. Pode capturar.")
+                    status = "Sessão aberta — pode capturar"
+                }
             } catch (e: Exception) {
                 status = "Erro no backend: ${e.message}"
             } finally {
