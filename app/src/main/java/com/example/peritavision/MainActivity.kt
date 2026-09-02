@@ -222,6 +222,8 @@ fun CaptureScreen() {
      *  não definido (a IA está perguntando, ou o assistente está desligado). */
     var iaTrilha by remember { mutableStateOf<String?>(null) }
     var iaPerguntandoTrilha by remember { mutableStateOf(false) }
+    /** Portão de fala: true enquanto a conversa está aberta (chamado + 8 s). */
+    var iaAtendendo by remember { mutableStateOf(false) }
     var iaPerito by remember { mutableStateOf("") }
     /** Quando a última captura foi disparada (qualquer via). Trava a FOTO EM
      *  DOBRO: a frase "assistente, capture uma foto disso" contém a palavra
@@ -306,6 +308,7 @@ fun CaptureScreen() {
         ponte.onStatus = { msg -> status = msg }
         // Triagem: a IA vai perguntar "objeto cortante ou peça íntima?".
         ponte.onTriagem = { iaPerguntandoTrilha = true; iaTrilha = null }
+        ponte.onAtendimento = { ativo -> iaAtendendo = ativo }
         // Trilha definida: a sessão de trabalho está de pé com o roteiro certo.
         // Fica no cartão e vai para a trilha de auditoria da sessão (evento
         // 'sistema'), para o laudo e o histórico saberem qual roteiro guiou.
@@ -376,6 +379,7 @@ fun CaptureScreen() {
             iaEnxergando = false
             iaTrilha = null
             iaPerguntandoTrilha = false
+            iaAtendendo = false
             iaDesligadaManual = true // o TTS reassume as falas da bancada
             status = "Assistente IA desligado."
             return
@@ -399,6 +403,7 @@ fun CaptureScreen() {
             iaEnxergando = false
             iaTrilha = null
             iaPerguntandoTrilha = false
+            iaAtendendo = false
         }
     }
 
@@ -1156,6 +1161,7 @@ fun CaptureScreen() {
             olhandoAgora = iaOlhandoAgora,
             trilha = iaTrilha,
             perguntandoTrilha = iaPerguntandoTrilha,
+            atendendo = iaAtendendo,
             perito = iaPerito,
             resposta = iaResposta,
             onAlternar = { alternarAssistenteIa() },
@@ -1829,6 +1835,8 @@ private fun CartaoAssistenteIa(
     trilha: String?,
     /** a IA está na triagem, perguntando o tipo de exame ao perito */
     perguntandoTrilha: Boolean,
+    /** portão de fala aberto: em conversa (chamou "PeritaVision" há menos de 8 s) */
+    atendendo: Boolean,
     perito: String,
     resposta: String,
     onAlternar: () -> Unit,
@@ -1838,17 +1846,21 @@ private fun CartaoAssistenteIa(
             titulo = "Assistente de voz",
             // Estados de verdade, não dois: desligado / ativo (câmera em
             // repouso, o normal) / olhando agora / sem imagem.
+            // Estados de verdade: desligado / perguntando a trilha / em conversa
+            // (olhando ou não) / ouvindo em silêncio. "Sem imagem" vira aviso
+            // no corpo do cartão, não etiqueta.
             etiqueta = when {
                 !ativo -> "desligado"
+                perguntandoTrilha -> "perguntando o exame"
                 olhandoAgora -> "olhando agora"
-                enxergando -> "ativo"
-                else -> "sem imagem"
+                atendendo -> "em conversa"
+                else -> "ouvindo em silêncio"
             },
             tomEtiqueta = when {
                 !ativo -> Tom.NEUTRO
-                olhandoAgora -> Tom.OK
-                enxergando -> Tom.OK
-                else -> Tom.ATENCAO
+                perguntandoTrilha -> Tom.ATENCAO
+                olhandoAgora || atendendo -> Tom.OK
+                else -> Tom.NEUTRO
             },
             grande = true,
         )
@@ -1883,8 +1895,9 @@ private fun CartaoAssistenteIa(
         if (resposta.isNotBlank()) BalaoConversa(resposta, doPerito = false)
         if (perito.isBlank() && resposta.isBlank()) {
             TextoApoio(
-                "Ouvindo pelos óculos — pergunte em voz alta (ex.: \"qual o próximo passo do método?\"). " +
-                    "Ele só OLHA quando você pedir.",
+                "Ouvindo pelos óculos e anotando tudo para o laudo. Só responde quando você " +
+                    "chamar \"PeritaVision\"; 8 segundos sem falar com ele e volta ao silêncio. " +
+                    "Só OLHA quando você pedir.",
             )
         }
         Spacer(Modifier.height(12.dp))
