@@ -493,7 +493,11 @@ class MentraGlassesDevice(
                         streamId = "pv-${System.currentTimeMillis()}",
                         // audio da narracao ja vai pelo BLE; sound=false evita suspender o mic
                         sound = false,
-                        video = StreamVideoConfig(width = 1280, height = 720, bitrate = 2_000_000, fps = 30),
+                        // 720p/2 Mbps/30 fps pedia mais do que o Wi-Fi da bancada dava: chegavam
+                        // ~6 quadros/s irregulares e o vídeo do laudo saía travado (campo 03/09).
+                        // 540p/1,2 Mbps/15 fps é o que os óculos sustentam — mais quadros de
+                        // verdade, mesma legibilidade do vestígio.
+                        video = StreamVideoConfig(width = 960, height = 540, bitrate = 1_200_000, fps = 15),
                     )
                 )
                 streamAtivo = true
