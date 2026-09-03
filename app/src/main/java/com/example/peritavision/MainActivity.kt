@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -224,6 +225,11 @@ fun CaptureScreen() {
     var iaPerguntandoTrilha by remember { mutableStateOf(false) }
     /** Portão de fala: true enquanto a conversa está aberta (chamado + 8 s). */
     var iaAtendendo by remember { mutableStateOf(false) }
+    /** TELA APAGADA por comando de voz ("PeritaVision, apaga a tela") — para
+     *  luz forense com a sala escura. Não é o desligar do Android: o app segue
+     *  em primeiro plano (áudio, vídeo e narração continuam); a tela vira um
+     *  painel preto com brilho mínimo. "Acende a tela" ou um toque voltam. */
+    var telaApagada by remember { mutableStateOf(false) }
     var iaPerito by remember { mutableStateOf("") }
     /** Quando a última captura foi disparada (qualquer via). Trava a FOTO EM
      *  DOBRO: a frase "assistente, capture uma foto disso" contém a palavra
@@ -404,7 +410,19 @@ fun CaptureScreen() {
             iaTrilha = null
             iaPerguntandoTrilha = false
             iaAtendendo = false
+            telaApagada = false
         }
+    }
+    // Brilho mínimo enquanto a tela está "apagada" e a tela não pode dormir
+    // (se o Android bloqueasse, o app iria para o fundo). Restaura ao voltar.
+    LaunchedEffect(telaApagada) {
+        val janela = (context as? android.app.Activity)?.window ?: return@LaunchedEffect
+        val attrs = janela.attributes
+        attrs.screenBrightness = if (telaApagada) 0.01f
+            else android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        janela.attributes = attrs
+        if (telaApagada) janela.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else janela.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     // Wi-Fi DOS OCULOS: o JPEG sobe pela rede do oculos, nao pelo Bluetooth.
@@ -793,8 +811,13 @@ fun CaptureScreen() {
     // Fica aqui (e não em ligarAssistenteIa) porque finalizarSessao é
     // declarada acima e função local não enxerga declaração abaixo dela.
     LaunchedEffect(ponteGemini) {
-        ponteGemini?.onComando = { id, nome ->
+        ponteGemini?.onComando = { id, nome, args ->
             when (nome) {
+                "controlar_tela" -> {
+                    val apagar = args.optString("acao") == "apagar"
+                    telaApagada = apagar
+                    ponteGemini?.responderComando(id, nome, true, if (apagar) "tela apagada" else "tela acesa")
+                }
                 "capturar_foto" -> {
                     val agora = System.currentTimeMillis()
                     when {
@@ -1231,6 +1254,21 @@ fun CaptureScreen() {
     }
     // Configurações POR CIMA da bancada (ver comentário do Box): a sessão, os
     // efeitos e o assistente continuam vivos enquanto o perito mexe aqui.
+    if (telaApagada) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(androidx.compose.ui.graphics.Color.Black)
+                .clickable { telaApagada = false },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "Tela apagada — diga \"PeritaVision, acende a tela\" ou toque aqui",
+                color = androidx.compose.ui.graphics.Color(0xFF3A3A3A),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
     if (mostrarConfiguracoes) {
         TelaConfiguracoes(
             config = config,
