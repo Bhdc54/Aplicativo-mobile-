@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.sync.withLock
 import java.io.DataOutputStream
 import java.io.File
 import java.net.HttpURLConnection
@@ -19,6 +20,16 @@ class BackendClient(var baseUrl: String) {
     /** Token JWT do perito, preenchido pelo [login]. */
     var token: String? = null
         private set
+    /** Credenciais do último login — para RENOVAR o token sozinho. O JWT do
+     *  backend expira (15 min por padrão) e uma perícia dura mais que isso:
+     *  em campo (03/09/2026) o Finalizar caiu com 401 depois de uma hora de
+     *  bancada, e a narração dos últimos 45 min foi recusada em silêncio.
+     *  Agora: token com mais de RENOVAR_APOS_MS é renovado ANTES da chamada,
+     *  e um 401 inesperado renova e repete a chamada uma vez. */
+    private var credenciais: Pair<String, String>? = null
+    @Volatile private var tokenObtidoEm = 0L
+    private val RENOVAR_APOS_MS = 10 * 60_000L
+    private val travaLogin = kotlinx.coroutines.sync.Mutex()
 
     /** Dados de uma captura autorizada pelo backend (token de USO UNICO). */
     data class CredencialCaptura(
@@ -37,7 +48,41 @@ class BackendClient(var baseUrl: String) {
         val t = r.optString("token").takeIf { it.isNotBlank() }
             ?: throw BackendException("login sem token: $r")
         token = t
+        tokenObtidoEm = System.currentTimeMillis()
+        credenciais = matricula to senha
         return t
+    }
+
+    /** Renova o token com as credenciais guardadas (uma renovação por vez). */
+    private suspend fun renovarToken(motivo: String) {
+        val (m, s) = credenciais ?: return
+        travaLogin.withLock {
+            // outra corrotina pode ter renovado enquanto esperávamos
+            if (System.currentTimeMillis() - tokenObtidoEm < 30_000L) return
+            Log.i(TAG, "renovando token ($motivo)")
+            login(m, s)
+        }
+    }
+
+    /** Garante token fresco antes de uma chamada autenticada. */
+    private suspend fun garantirToken() {
+        if (credenciais == null) return
+        if (System.currentTimeMillis() - tokenObtidoEm > RENOVAR_APOS_MS) {
+            runCatching { renovarToken("token com mais de ${RENOVAR_APOS_MS / 60_000} min") }
+                .onFailure { Log.w(TAG, "renovação falhou: ${it.message}") }
+        }
+    }
+
+    /** Executa a chamada; num 401, renova o token e tenta UMA vez mais. */
+    private suspend fun <T> comReautenticacao(bloco: suspend () -> T): T {
+        garantirToken()
+        return try {
+            bloco()
+        } catch (e: BackendException) {
+            if (e.codigo != 401 || credenciais == null) throw e
+            renovarToken("401 do backend")
+            bloco()
+        }
     }
 
     /** Tudo que o Atena devolveu sobre o caso ao resolver o protocolo —
@@ -303,6 +348,13 @@ class BackendClient(var baseUrl: String) {
         caminho: String,
         corpo: JSONObject,
         autenticado: Boolean = true,
+    ): JSONObject = if (autenticado) comReautenticacao { postJsonCru(caminho, corpo, true) }
+        else postJsonCru(caminho, corpo, false)
+
+    private suspend fun postJsonCru(
+        caminho: String,
+        corpo: JSONObject,
+        autenticado: Boolean,
     ): JSONObject = withContext(Dispatchers.IO) {
         val conn = abrir(URL(baseUrl.trimEnd('/') + caminho), "POST").apply {
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -315,14 +367,22 @@ class BackendClient(var baseUrl: String) {
         if (texto.isBlank()) JSONObject() else JSONObject(texto)
     }
 
-    private suspend fun getJson(caminho: String): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun getJson(caminho: String): JSONObject = comReautenticacao {
+        getJsonCru(caminho)
+    }
+
+    private suspend fun getJsonCru(caminho: String): JSONObject = withContext(Dispatchers.IO) {
         val conn = abrir(URL(baseUrl.trimEnd('/') + caminho), "GET").apply { autenticar(this) }
         val texto = conferir(conn, "GET $caminho")
         conn.disconnect()
         if (texto.isBlank()) JSONObject() else JSONObject(texto)
     }
 
-    private suspend fun getArray(caminho: String): JSONArray = withContext(Dispatchers.IO) {
+    private suspend fun getArray(caminho: String): JSONArray = comReautenticacao {
+        getArrayCru(caminho)
+    }
+
+    private suspend fun getArrayCru(caminho: String): JSONArray = withContext(Dispatchers.IO) {
         val conn = abrir(URL(baseUrl.trimEnd('/') + caminho), "GET").apply { autenticar(this) }
         val texto = conferir(conn, "GET $caminho")
         conn.disconnect()
@@ -340,7 +400,7 @@ class BackendClient(var baseUrl: String) {
         val texto = fluxo?.bufferedReader()?.use { it.readText() }.orEmpty()
         if (codigo !in 200..299) {
             val motivo = runCatching { JSONObject(texto).optString("erro") }.getOrNull()
-            throw BackendException("$oque falhou ($codigo): ${motivo.orEmpty().ifBlank { texto }}")
+            throw BackendException("$oque falhou ($codigo): ${motivo.orEmpty().ifBlank { texto }}", codigo)
         }
         return texto
     }
@@ -348,4 +408,4 @@ class BackendClient(var baseUrl: String) {
     companion object { private const val TAG = "BackendClient" }
 }
 
-class BackendException(mensagem: String) : Exception(mensagem)
+class BackendException(mensagem: String, val codigo: Int = 0) : Exception(mensagem)
