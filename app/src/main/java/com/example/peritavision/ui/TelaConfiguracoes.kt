@@ -168,6 +168,41 @@ fun TelaConfiguracoes(
                 }
             }
 
+            // ── PALAVRAS DE MODO ────────────────────────────────────────────
+            CartaoPv {
+                CabecalhoCartao(titulo = "Palavras de comando", grande = true)
+                TextoApoio(
+                    "A IA não precisa mais de \"PeritaVision\" a cada frase. Diga a palavra no " +
+                        "INÍCIO da frase (ou sozinha) e ela muda de modo — e fica nele até você trocar. " +
+                        "Prefira palavras curtas que não apareçam na fala normal da bancada.",
+                )
+                Spacer(Modifier.height(10.dp))
+                var pConversa by remember { mutableStateOf(config.palavraConversa) }
+                var pSilencio by remember { mutableStateOf(config.palavraSilencio) }
+                var pPrivado by remember { mutableStateOf(config.palavraPrivado) }
+                val padrao = catalogo.palavrasPadrao
+                CampoPv(
+                    valor = pConversa,
+                    onValueChange = { pConversa = it; config.palavraConversa = it },
+                    rotulo = "Voltar a conversar (padrão: ${padrao["conversa"] ?: "assistente"})",
+                )
+                TextoApoio("A IA responde, conduz o roteiro e tira foto a pedido.")
+                Spacer(Modifier.height(8.dp))
+                CampoPv(
+                    valor = pSilencio,
+                    onValueChange = { pSilencio = it; config.palavraSilencio = it },
+                    rotulo = "Silêncio (padrão: ${padrao["silencio"] ?: "silêncio"})",
+                )
+                TextoApoio("A IA não fala, mas continua ouvindo, transcrevendo para o laudo e registrando achados. \"O que foi salvo?\" ela lê mesmo assim.")
+                Spacer(Modifier.height(8.dp))
+                CampoPv(
+                    valor = pPrivado,
+                    onValueChange = { pPrivado = it; config.palavraPrivado = it },
+                    rotulo = "Privado (padrão: ${padrao["privado"] ?: "privado"})",
+                )
+                TextoApoio("Microfone fechado: nada é ouvido nem gravado. Para sair, toque em \"Conversar\" no cartão do assistente.", Tom.ATENCAO)
+            }
+
             // ── MODELO ──────────────────────────────────────────────────────
             CartaoPv {
                 CabecalhoCartao(

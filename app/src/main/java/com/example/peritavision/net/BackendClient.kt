@@ -214,9 +214,13 @@ class BackendClient(var baseUrl: String) {
     }
 
     /** Registra um evento da sessao (ex.: comando de voz reconhecido). */
-    suspend fun registrarEvento(sessaoId: String, tipo: String, intencao: String, origem: String) {
+    suspend fun registrarEvento(
+        sessaoId: String, tipo: String, intencao: String, origem: String,
+        payload: JSONObject? = null,
+    ) {
         val corpo = JSONObject()
             .put("tipo", tipo).put("intencao", intencao).put("origem", origem)
+        if (payload != null) corpo.put("payload", payload)
         runCatching { postJson("/v1/sessoes/$sessaoId/eventos", corpo) }
             .onFailure { Log.w(TAG, "evento nao registrado: ${it.message}") }
     }

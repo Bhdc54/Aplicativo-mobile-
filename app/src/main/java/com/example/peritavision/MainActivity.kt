@@ -223,8 +223,25 @@ fun CaptureScreen() {
      *  não definido (a IA está perguntando, ou o assistente está desligado). */
     var iaTrilha by remember { mutableStateOf<String?>(null) }
     var iaPerguntandoTrilha by remember { mutableStateOf(false) }
-    /** Portão de fala: true enquanto a conversa está aberta (chamado + 8 s). */
-    var iaAtendendo by remember { mutableStateOf(false) }
+    /** MODO da IA: conversa | silencio | privado (troca por palavra ou toque). */
+    var iaModo by remember { mutableStateOf("conversa") }
+    /** Achados registrados pela IA nesta sessão (registrar_achado), para o cartão do laudo. */
+    var achados by remember { mutableStateOf<List<String>>(emptyList()) }
+    // Bipes curtos no lugar de fala para confirmar modo e achado (em silêncio
+    // a IA não pode falar "ok"). STREAM_MUSIC segue a rota Bluetooth dos óculos.
+    val bipes = remember { runCatching { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 80) }.getOrNull() }
+    DisposableEffect(Unit) { onDispose { runCatching { bipes?.release() } } }
+    fun bipe(tipo: String) {
+        val b = bipes ?: return
+        runCatching {
+            when (tipo) {
+                "conversa" -> b.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 180)
+                "silencio" -> b.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 120)
+                "privado" -> b.startTone(android.media.ToneGenerator.TONE_PROP_NACK, 220)
+                else -> b.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 90) // achado
+            }
+        }
+    }
     /** Diagnóstico da saída de voz (por onde o som sai; erros). */
     var iaVoz by remember { mutableStateOf("") }
     /** TELA APAGADA por comando de voz ("PeritaVision, apaga a tela") — para
@@ -312,11 +329,29 @@ fun CaptureScreen() {
             sessaoId ?: "bancada-teste",
             modelo = config.modelo,
             trilha = config.trilhaParaPonte(),
+            palavras = config.palavrasParaPonte(),
         )
         ponte.onStatus = { msg -> status = msg }
+        ponte.onModo = { modo, origem ->
+            iaModo = modo
+            if (origem != "abertura") bipe(modo)
+            status = when (modo) {
+                "silencio" -> "IA em silêncio — ouvindo e registrando; diga a palavra para conversar."
+                "privado" -> "Privado — microfone fechado. Toque em Conversar para voltar."
+                else -> "IA em conversa."
+            }
+        }
+        ponte.onAchado = { a ->
+            val item = a.optString("item").takeIf { it.isNotBlank() }?.let { "item $it: " } ?: ""
+            val campo = a.optString("campo").takeIf { it.isNotBlank() }?.let { " de $it" } ?: ""
+            achados = achados + "${item}${a.optString("tipo")}$campo — ${a.optString("valor")}"
+            bipe("achado")
+            sessaoId?.let { sid ->
+                escopo.launch { backend.registrarEvento(sid, "marcador", "achado", "ia", a) }
+            }
+        }
         // Triagem: a IA vai perguntar "objeto cortante ou peça íntima?".
         ponte.onTriagem = { iaPerguntandoTrilha = true; iaTrilha = null }
-        ponte.onAtendimento = { ativo -> iaAtendendo = ativo }
         ponte.onVoz = { d -> iaVoz = d }
         // Trilha definida: a sessão de trabalho está de pé com o roteiro certo.
         // Fica no cartão e vai para a trilha de auditoria da sessão (evento
@@ -388,7 +423,7 @@ fun CaptureScreen() {
             iaEnxergando = false
             iaTrilha = null
             iaPerguntandoTrilha = false
-            iaAtendendo = false
+            iaModo = "conversa"
             iaDesligadaManual = true // o TTS reassume as falas da bancada
             status = "Assistente IA desligado."
             return
@@ -412,7 +447,8 @@ fun CaptureScreen() {
             iaEnxergando = false
             iaTrilha = null
             iaPerguntandoTrilha = false
-            iaAtendendo = false
+            iaModo = "conversa"
+            achados = emptyList()
             iaVoz = ""
             telaApagada = false
         }
@@ -1166,6 +1202,7 @@ fun CaptureScreen() {
             ficha = fichaLacre,
             fotosSeladas = fotosEnviadas,
             narracoes = narracoes,
+            achados = achados,
         )
     }
     val cartaoEvidencia: @Composable () -> Unit = {
@@ -1188,7 +1225,8 @@ fun CaptureScreen() {
             olhandoAgora = iaOlhandoAgora,
             trilha = iaTrilha,
             perguntandoTrilha = iaPerguntandoTrilha,
-            atendendo = iaAtendendo,
+            modo = iaModo,
+            onModo = { m -> ponteGemini?.definirModo(m) },
             voz = iaVoz,
             perito = iaPerito,
             resposta = iaResposta,
@@ -1717,6 +1755,7 @@ private fun CartaoLaudoEmPreenchimento(
     ficha: BackendClient.FichaLacre?,
     fotosSeladas: Int,
     narracoes: List<String>,
+    achados: List<String>,
 ) {
     val autoridade = caso?.autoridade ?: ficha?.solicitante
     val orgao = caso?.unidadeRequisitante ?: ficha?.unidadeRequisitante
@@ -1743,9 +1782,10 @@ private fun CartaoLaudoEmPreenchimento(
             dica = "Vem do ATENA ao abrir a perícia.", itens = objetivos),
         SecaoLaudo(4, "Materiais e métodos", preenchida = false,
             dica = "Redigida na revisão do laudo, a partir do método padrão."),
-        SecaoLaudo(5, "Resultados", preenchida = fotosSeladas > 0,
-            dica = "As fotos que você selar entram aqui como figuras.",
-            campos = listOf("Figuras" to "$fotosSeladas foto(s) selada(s) por hash")),
+        SecaoLaudo(5, "Resultados", preenchida = fotosSeladas > 0 || achados.isNotEmpty(),
+            dica = "Os achados que você enunciar (\"item um, sangue negativo\") entram aqui; as fotos viram figuras.",
+            campos = listOf("Figuras" to "$fotosSeladas foto(s) selada(s) por hash", "Achados" to "${achados.size} registrado(s)"),
+            itens = achados.takeLast(5)),
         SecaoLaudo(6, "Considerações", preenchida = narracoes.isNotEmpty(),
             dica = "O que você narrar na bancada entra aqui.",
             itens = narracoes.takeLast(3).map { if (it.length > 180) it.take(180) + "…" else it }),
@@ -1878,8 +1918,10 @@ private fun CartaoAssistenteIa(
     trilha: String?,
     /** a IA está na triagem, perguntando o tipo de exame ao perito */
     perguntandoTrilha: Boolean,
-    /** portão de fala aberto: em conversa (chamou "PeritaVision" há menos de 8 s) */
-    atendendo: Boolean,
+    /** modo da IA: conversa | silencio | privado */
+    modo: String,
+    /** troca de modo pelo toque (único caminho para sair de privado) */
+    onModo: (String) -> Unit,
     /** diagnóstico da saída de voz ("→ Mentra Live · 12 trecho(s)", "ERRO: ...") */
     voz: String,
     perito: String,
@@ -1897,15 +1939,17 @@ private fun CartaoAssistenteIa(
             etiqueta = when {
                 !ativo -> "desligado"
                 perguntandoTrilha -> "perguntando o exame"
+                modo == "privado" -> "privado — mic fechado"
+                modo == "silencio" -> "silêncio — ouvindo e registrando"
                 olhandoAgora -> "olhando agora"
-                atendendo -> "em conversa"
-                else -> "ouvindo em silêncio"
+                else -> "em conversa"
             },
             tomEtiqueta = when {
                 !ativo -> Tom.NEUTRO
                 perguntandoTrilha -> Tom.ATENCAO
-                olhandoAgora || atendendo -> Tom.OK
-                else -> Tom.NEUTRO
+                modo == "privado" -> Tom.ERRO
+                modo == "silencio" -> Tom.NEUTRO
+                else -> Tom.OK
             },
             grande = true,
         )
@@ -1943,10 +1987,21 @@ private fun CartaoAssistenteIa(
         if (resposta.isNotBlank()) BalaoConversa(resposta, doPerito = false)
         if (perito.isBlank() && resposta.isBlank()) {
             TextoApoio(
-                "Ouvindo pelos óculos e anotando tudo para o laudo. Só responde quando você " +
-                    "chamar \"PeritaVision\"; 8 segundos sem falar com ele e volta ao silêncio. " +
-                    "Só OLHA quando você pedir.",
+                when (modo) {
+                    "silencio" -> "Ouvindo e registrando achados em silêncio. \"O que foi salvo?\" ela lê. Diga a palavra de conversa para ela voltar a falar."
+                    "privado" -> "Microfone fechado: nada é ouvido nem gravado. Toque em Conversar para voltar."
+                    else -> "Fale normalmente: ela responde, conduz o roteiro e registra os achados. Diga a palavra de silêncio para trabalhar sem interrupção."
+                },
             )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (modo == "conversa") BotaoTonal("Conversar", modifier = Modifier.weight(1f), onClick = {})
+            else BotaoContorno("Conversar", modifier = Modifier.weight(1f), onClick = { onModo("conversa") })
+            if (modo == "silencio") BotaoTonal("Silêncio", modifier = Modifier.weight(1f), onClick = {})
+            else BotaoContorno("Silêncio", modifier = Modifier.weight(1f), onClick = { onModo("silencio") })
+            if (modo == "privado") BotaoTonal("Privado", modifier = Modifier.weight(1f), onClick = {})
+            else BotaoContorno("Privado", tom = Tom.ERRO, modifier = Modifier.weight(1f), onClick = { onModo("privado") })
         }
         Spacer(Modifier.height(12.dp))
         BotaoContorno(
