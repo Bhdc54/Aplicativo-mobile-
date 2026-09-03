@@ -61,6 +61,11 @@ class PonteGemini(
     /** Portão de fala da ponte: true = em conversa (chamou "PeritaVision");
      *  false = off — só ouvindo e anotando para o laudo. */
     var onAtendimento: (Boolean) -> Unit = {}
+    /** Diagnóstico da SAÍDA DE VOZ, em texto curto para o cartão: por onde o
+     *  som está saindo (óculos? alto-falante do tablet?), quantos trechos
+     *  tocaram, erro de AudioTrack. Nasceu do teste de campo de 02/09: a IA
+     *  "escrevia mas não falava" e não havia como saber onde o som morria. */
+    var onVoz: (String) -> Unit = {}
     var onResposta: (String) -> Unit = {}
     var onStatus: (String) -> Unit = {}
     /** Chamado quando o servidor confirma que o vídeo dos óculos chegou ao
@@ -119,6 +124,30 @@ class PonteGemini(
     /** Marca de tempo do último trecho de voz recebido — serve para saber
      *  onde uma fala termina e outra começa (silêncio > 1,2 s). */
     @Volatile private var ultimoAudioMs = 0L
+    private var trechosDaFala = 0
+
+    /** FILA + THREAD PRÓPRIA para a voz. O write do AudioTrack é bloqueante
+     *  (espera o som escoar pelo Bluetooth); rodando na thread do OkHttp ele
+     *  segurava a leitura do WebSocket por segundos — e uma rota A2DP lenta
+     *  virava atraso e perda de mensagens. Agora o socket só enfileira. */
+    private val filaVoz = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+    @Volatile private var threadVoz: Thread? = null
+    private fun garantirThreadVoz() {
+        if (threadVoz?.isAlive == true) return
+        threadVoz = Thread({
+            while (!encerrado) {
+                val pcm = filaVoz.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
+                runCatching { tocar(pcm) }.onFailure { Log.w(TAG, "voz: falha ao tocar", it) }
+            }
+        }, "pv-voz").apply { isDaemon = true; start() }
+    }
+
+    private fun descreverRota(t: AudioTrack): String = runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= 24) {
+            val d = t.routedDevice
+            if (d == null) "rota indefinida" else "${d.productName}".ifBlank { "dispositivo ${d.type}" }
+        } else "rota n/d"
+    }.getOrDefault("rota ?")
 
     /** Escreve no AudioTrack mantendo a saída VIVA entre uma fala e outra.
      *
@@ -147,19 +176,34 @@ class PonteGemini(
             // sair, então nada é cortado ao trocar de track.
             track?.let { antigo -> runCatching { antigo.stop(); antigo.release() } }
             track = null
+            trechosDaFala = 0
         }
 
-        var t = track ?: runCatching { criarTrack() }.getOrNull()?.also { track = it } ?: return
+        var t = track ?: runCatching { criarTrack() }.getOrNull()?.also { track = it }
+        if (t == null) {
+            Log.e(TAG, "voz: não consegui criar o AudioTrack")
+            onVoz("ERRO: não consegui abrir a saída de áudio")
+            return
+        }
         if (t.playState != AudioTrack.PLAYSTATE_PLAYING) {
             Log.w(TAG, "AudioTrack não estava tocando (estado ${t.playState}) — religando")
             runCatching { t.play() }
         }
-        val r = runCatching { t.write(pcm, 0, pcm.size) }.getOrDefault(AudioTrack.ERROR_DEAD_OBJECT)
+        var r = runCatching { t.write(pcm, 0, pcm.size) }.getOrDefault(AudioTrack.ERROR_DEAD_OBJECT)
         if (r < 0) {
             Log.w(TAG, "AudioTrack morto (código $r) — recriando a saída de voz")
             runCatching { t.release() }
-            t = runCatching { criarTrack() }.getOrNull()?.also { track = it } ?: return
-            runCatching { t.write(pcm, 0, pcm.size) }
+            t = runCatching { criarTrack() }.getOrNull()?.also { track = it }
+            if (t == null) { onVoz("ERRO: saída de áudio morreu (código $r)"); return }
+            r = runCatching { t.write(pcm, 0, pcm.size) }.getOrDefault(AudioTrack.ERROR_DEAD_OBJECT)
+            onVoz(if (r < 0) "ERRO: áudio recusado (código $r)" else "recuperado → ${descreverRota(t)}")
+        }
+        trechosDaFala += 1
+        // Diagnóstico no cartão: no 1º trecho de cada fala (rota) e a cada 20.
+        if (trechosDaFala == 1 || trechosDaFala % 20 == 0) {
+            val rota = descreverRota(t)
+            Log.i(TAG, "voz: fala nova → $rota (trecho $trechosDaFala, estado ${t.playState})")
+            onVoz("→ $rota · ${trechosDaFala} trecho(s)")
         }
     }
 
@@ -222,7 +266,8 @@ class PonteGemini(
                     // pacote deixava o microfone mudo por dezenas de segundos
                     // depois da fala — e as perguntas do perito se perdiam.
                     falandoAteMs = maxOf(falandoAteMs, agora) + duracaoMs
-                    tocar(pcm)
+                    filaVoz.offer(pcm)
+                    garantirThreadVoz()
                 }
             }
 
@@ -311,6 +356,7 @@ class PonteGemini(
         pronto = false
         principal.removeCallbacksAndMessages(null)
         runCatching { ws?.close(1000, "encerrado pelo app") }
+        filaVoz.clear()
         runCatching { track?.stop(); track?.release() }
     }
 
