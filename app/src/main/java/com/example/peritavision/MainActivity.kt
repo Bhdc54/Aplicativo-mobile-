@@ -225,6 +225,8 @@ fun CaptureScreen() {
     var iaPerguntandoTrilha by remember { mutableStateOf(false) }
     /** Portão de fala: true enquanto a conversa está aberta (chamado + 8 s). */
     var iaAtendendo by remember { mutableStateOf(false) }
+    /** Diagnóstico da saída de voz (por onde o som sai; erros). */
+    var iaVoz by remember { mutableStateOf("") }
     /** TELA APAGADA por comando de voz ("PeritaVision, apaga a tela") — para
      *  luz forense com a sala escura. Não é o desligar do Android: o app segue
      *  em primeiro plano (áudio, vídeo e narração continuam); a tela vira um
@@ -315,6 +317,7 @@ fun CaptureScreen() {
         // Triagem: a IA vai perguntar "objeto cortante ou peça íntima?".
         ponte.onTriagem = { iaPerguntandoTrilha = true; iaTrilha = null }
         ponte.onAtendimento = { ativo -> iaAtendendo = ativo }
+        ponte.onVoz = { d -> iaVoz = d }
         // Trilha definida: a sessão de trabalho está de pé com o roteiro certo.
         // Fica no cartão e vai para a trilha de auditoria da sessão (evento
         // 'sistema'), para o laudo e o histórico saberem qual roteiro guiou.
@@ -410,6 +413,7 @@ fun CaptureScreen() {
             iaTrilha = null
             iaPerguntandoTrilha = false
             iaAtendendo = false
+            iaVoz = ""
             telaApagada = false
         }
     }
@@ -1185,6 +1189,7 @@ fun CaptureScreen() {
             trilha = iaTrilha,
             perguntandoTrilha = iaPerguntandoTrilha,
             atendendo = iaAtendendo,
+            voz = iaVoz,
             perito = iaPerito,
             resposta = iaResposta,
             onAlternar = { alternarAssistenteIa() },
@@ -1875,6 +1880,8 @@ private fun CartaoAssistenteIa(
     perguntandoTrilha: Boolean,
     /** portão de fala aberto: em conversa (chamou "PeritaVision" há menos de 8 s) */
     atendendo: Boolean,
+    /** diagnóstico da saída de voz ("→ Mentra Live · 12 trecho(s)", "ERRO: ...") */
+    voz: String,
     perito: String,
     resposta: String,
     onAlternar: () -> Unit,
@@ -1920,6 +1927,9 @@ private fun CartaoAssistenteIa(
                 Tom.ATENCAO,
             )
             trilha != null -> LinhaCampo("Roteiro", trilha)
+        }
+        if (voz.isNotBlank()) {
+            TextoApoio("Voz $voz", if (voz.startsWith("ERRO")) Tom.ERRO else null)
         }
         if (!enxergando) {
             TextoApoio(
