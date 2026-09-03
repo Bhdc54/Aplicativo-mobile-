@@ -68,9 +68,10 @@ class PonteGemini(
     var onVideoAtivo: () -> Unit = {}
     /** Janela de visão abriu/fechou: a IA só OLHA quando o perito pede. */
     var onVisao: (Boolean) -> Unit = {}
-    /** O Gemini pediu uma função de bancada (capturar_foto, finalizar_sessao).
-     *  Quem executa é o app; responda com responderComando(id, nome, ...). */
-    var onComando: (id: String, nome: String) -> Unit = { _, _ -> }
+    /** O Gemini pediu uma função de bancada (capturar_foto, finalizar_sessao,
+     *  controlar_tela). Quem executa é o app; responda com responderComando(id, nome, ...).
+     *  `argumentos` são os parâmetros da função (ex.: {"acao":"apagar"}). */
+    var onComando: (id: String, nome: String, argumentos: JSONObject) -> Unit = { _, _, _ -> }
 
     @Volatile private var pronto = false
     /** true depois de encerrar(): a reconexão automática para de tentar. */
@@ -197,7 +198,10 @@ class PonteGemini(
                     "triagem" -> onTriagem()
                     "atendimento" -> onAtendimento(msg.optBoolean("ativo"))
                     "trilha" -> onTrilha(msg.optString("trilha"), msg.optString("nome"), msg.optString("origem"))
-                    "comando" -> onComando(msg.optString("id"), msg.optString("nome"))
+                    "comando" -> onComando(
+                        msg.optString("id"), msg.optString("nome"),
+                        msg.optJSONObject("argumentos") ?: JSONObject(),
+                    )
                     "erro" -> onStatus("Assistente IA: ${msg.optString("mensagem")}")
                 }
             }
