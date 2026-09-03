@@ -53,6 +53,27 @@ class ConfiguracoesApp(context: Context) {
         get() = prefs.getString(CHAVE_WIFI_SENHA, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_WIFI_SENHA, v).apply()
 
+    /** PALAVRAS DE MODO do assistente (03/09/2026 — fim do "PeritaVision" a
+     *  cada frase). O perito diz a palavra no início da frase (ou sozinha) e a
+     *  IA muda de modo: conversa (responde), silêncio (só ouve e registra) ou
+     *  privado (microfone fechado). Vazio = padrão da ponte. */
+    var palavraConversa: String
+        get() = prefs.getString(CHAVE_PAL_CONVERSA, "") ?: ""
+        set(v) = prefs.edit().putString(CHAVE_PAL_CONVERSA, v.trim()).apply()
+    var palavraSilencio: String
+        get() = prefs.getString(CHAVE_PAL_SILENCIO, "") ?: ""
+        set(v) = prefs.edit().putString(CHAVE_PAL_SILENCIO, v.trim()).apply()
+    var palavraPrivado: String
+        get() = prefs.getString(CHAVE_PAL_PRIVADO, "") ?: ""
+        set(v) = prefs.edit().putString(CHAVE_PAL_PRIVADO, v.trim()).apply()
+
+    /** Mapa modo → palavra, só com as que o perito preencheu. */
+    fun palavrasParaPonte(): Map<String, String> = buildMap {
+        palavraConversa.takeIf { it.isNotBlank() }?.let { put("conversa", it) }
+        palavraSilencio.takeIf { it.isNotBlank() }?.let { put("silencio", it) }
+        palavraPrivado.takeIf { it.isNotBlank() }?.let { put("privado", it) }
+    }
+
     /** O que vai no {tipo:'iniciar'} da ponte: null = "não fixei, pergunte". */
     fun trilhaParaPonte(): String? = trilha.takeIf { it != TRILHA_PERGUNTAR && it.isNotBlank() }
 
@@ -63,6 +84,10 @@ class ConfiguracoesApp(context: Context) {
         private const val CHAVE_MATRICULA = "pericia.ultima_matricula"
         private const val CHAVE_WIFI_SSID = "oculos.wifi_ssid"
         private const val CHAVE_WIFI_SENHA = "oculos.wifi_senha"
+        private const val CHAVE_PAL_CONVERSA = "assistente.palavra_conversa"
+        private const val CHAVE_PAL_SILENCIO = "assistente.palavra_silencio"
+        private const val CHAVE_PAL_PRIVADO = "assistente.palavra_privado"
+        val PALAVRAS_PADRAO = mapOf("conversa" to "assistente", "silencio" to "silêncio", "privado" to "privado")
     }
 }
 
@@ -74,6 +99,7 @@ data class CatalogoPonte(
     val trilhas: List<TrilhaCatalogo>,
     val modelos: List<String>,
     val modeloPadrao: String,
+    val palavrasPadrao: Map<String, String> = ConfiguracoesApp.PALAVRAS_PADRAO,
 ) {
     companion object {
         /** Cópia local para a tela não ficar vazia quando a ponte está fora do

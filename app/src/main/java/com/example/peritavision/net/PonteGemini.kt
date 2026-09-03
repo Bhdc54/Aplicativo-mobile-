@@ -51,6 +51,8 @@ class PonteGemini(
     /** Trilha fixada em Configurações (id do catálogo); null = a IA pergunta
      *  ao perito na abertura ("objeto cortante ou peça íntima?"). */
     private val trilha: String? = null,
+    /** Palavras de modo escolhidas pelo perito (modo → palavra); vazio = padrão da ponte. */
+    private val palavras: Map<String, String> = emptyMap(),
 ) {
     var onTranscricao: (String) -> Unit = {}
     /** A ponte abriu a sessão de TRIAGEM: a IA vai perguntar a trilha. */
@@ -58,9 +60,14 @@ class PonteGemini(
     /** Trilha definida (id, nome, origem 'perito'|'app'|'memoria'): a sessão
      *  de trabalho está de pé com o roteiro certo. */
     var onTrilha: (id: String, nome: String, origem: String) -> Unit = { _, _, _ -> }
-    /** Portão de fala da ponte: true = em conversa (chamou "PeritaVision");
-     *  false = off — só ouvindo e anotando para o laudo. */
-    var onAtendimento: (Boolean) -> Unit = {}
+    /** MODO de fala da IA: "conversa" | "silencio" | "privado" (+ origem
+     *  'voz' | 'toque' | 'abertura'). Substitui o chamado por nome. */
+    var onModo: (modo: String, origem: String) -> Unit = { _, _ -> }
+    /** Achado registrado pela IA (registrar_achado): dado estruturado para o laudo. */
+    var onAchado: (JSONObject) -> Unit = {}
+    /** Modo atual, para o app decidir (ex.: não mandar PCM em privado). */
+    @Volatile var modo: String = "conversa"
+        private set
     /** Diagnóstico da SAÍDA DE VOZ, em texto curto para o cartão: por onde o
      *  som está saindo (óculos? alto-falante do tablet?), quantos trechos
      *  tocaram, erro de AudioTrack. Nasceu do teste de campo de 02/09: a IA
@@ -215,6 +222,7 @@ class PonteGemini(
                 val iniciar = JSONObject().put("tipo", "iniciar").put("sessaoId", sessaoId)
                 if (modelo.isNotBlank()) iniciar.put("modelo", modelo)
                 if (!trilha.isNullOrBlank()) iniciar.put("trilha", trilha)
+                if (palavras.isNotEmpty()) iniciar.put("palavras", JSONObject(palavras))
                 webSocket.send(iniciar.toString())
             }
 
@@ -240,7 +248,11 @@ class PonteGemini(
                     "videoAtivo" -> onVideoAtivo()
                     "visao" -> onVisao(msg.optBoolean("ativa"))
                     "triagem" -> onTriagem()
-                    "atendimento" -> onAtendimento(msg.optBoolean("ativo"))
+                    "modo" -> {
+                        modo = msg.optString("modo", "conversa")
+                        onModo(modo, msg.optString("origem"))
+                    }
+                    "achado" -> msg.optJSONObject("achado")?.let { onAchado(it) }
                     "trilha" -> onTrilha(msg.optString("trilha"), msg.optString("nome"), msg.optString("origem"))
                     "comando" -> onComando(
                         msg.optString("id"), msg.optString("nome"),
@@ -338,13 +350,20 @@ class PonteGemini(
         }
     }
 
+    /** Troca de modo pelo TOQUE (botões do cartão). É o único jeito de sair
+     *  de "privado" — com o microfone fechado, ninguém ouve a palavra. */
+    fun definirModo(novo: String) {
+        runCatching { ws?.send(JSONObject().put("tipo", "modo").put("modo", novo).toString()) }
+    }
+
     /** true enquanto a voz do assistente ainda está saindo no alto-falante. */
     fun estaFalando(): Boolean = System.currentTimeMillis() < falandoAteMs + 400L
 
     /** Cópia do PCM16/16kHz dos óculos. Barato: se a ponte não está pronta, ignora.
      *  HALF-DUPLEX: enquanto o assistente fala, o mic não sobe — ele não se ouve. */
     fun enviarPcm(pcm: ByteArray) {
-        if (!pronto || estaFalando()) return
+        // Privado: a ponte já descarta, mas não faz sentido nem gastar rede.
+        if (!pronto || estaFalando() || modo == "privado") return
         val quadro = ByteArray(pcm.size + 1)
         quadro[0] = 0x01
         System.arraycopy(pcm, 0, quadro, 1, pcm.size)
@@ -397,7 +416,10 @@ class PonteGemini(
                         val arr = msg.optJSONArray("modelos") ?: org.json.JSONArray()
                         for (i in 0 until arr.length()) add(arr.getString(i))
                     }
-                    terminar(CatalogoPonte(trilhas, modelos, msg.optString("modeloPadrao")))
+                    val pp = msg.optJSONObject("palavrasPadrao")
+                    val palavrasPadrao = if (pp == null) com.example.peritavision.data.ConfiguracoesApp.PALAVRAS_PADRAO
+                        else buildMap { pp.keys().forEach { k -> put(k, pp.optString(k)) } }
+                    terminar(CatalogoPonte(trilhas, modelos, msg.optString("modeloPadrao"), palavrasPadrao))
                     webSocket.close(1000, "catálogo recebido")
                 }
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
