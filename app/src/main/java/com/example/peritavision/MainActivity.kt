@@ -101,6 +101,12 @@ import kotlinx.coroutines.withContext
 // ── Marca ───────────────────────────────────────────────────────────────────
 // A logo em si é um arquivo: res/drawable/logo.xml. Para trocar pela logo real,
 // leia as instruções que estão dentro daquele arquivo — não precisa vir aqui.
+/** Quanto da requisição vai para a sessão da BANCADA (a IA que fala com o
+ *  perito). O laudo continua recebendo o documento inteiro: aqui o limite
+ *  existe porque o contexto viaja como UM turno de texto da sessão Live, e um
+ *  turno gigante consome a janela de contexto e emudece o modelo. */
+private const val LIMITE_REQUISICAO_BANCADA = 8000
+
 private const val NOME_EMPRESA = "Facilmova"
 private const val SLOGAN_APP = "Perícia assistida · POLITEC-MT"
 
@@ -601,10 +607,22 @@ fun CaptureScreen() {
             }
             val req = textoRequisicao
             if (req != null) {
-                append(" CONTEÚDO DO DOCUMENTO PRINCIPAL (requisição anexada no Atena, texto integral; ")
+                // RECORTE, não o texto integral. Desde que o backend passou a
+                // ler o ZIP da requisição inteira, isto podia ter 120 mil
+                // caracteres: um turno de texto desse tamanho na sessão Live
+                // come a janela de contexto e a IA emudece. O laudo usa o
+                // texto completo; a bancada precisa do começo, que é onde
+                // está o histórico do fato e o que a autoridade pediu.
+                val recorte = req.take(LIMITE_REQUISICAO_BANCADA)
+                append(" CONTEÚDO DO DOCUMENTO PRINCIPAL (requisição anexada no Atena; ")
                 append("quando houver linhas \"===== ARQUIVO n/N \u2014 nome =====\", cada trecho é um ")
                 append("arquivo do pacote — a requisição e seus anexos): ")
-                append(req)
+                append(recorte)
+                if (req.length > recorte.length) {
+                    append(" [...este é o início do documento (${recorte.length} de ${req.length} caracteres); ")
+                    append("o restante está no laudo. Se o perito perguntar algo que não está aqui, diga que ")
+                    append("essa parte do documento não veio para a bancada.]")
+                }
             } else {
                 // Sem isto a IA só ficava sem o texto e improvisava. Agora ela
                 // sabe que não há requisição e o que dizer ao perito.
