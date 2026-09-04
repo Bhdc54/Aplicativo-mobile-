@@ -340,7 +340,7 @@ fun CaptureScreen() {
             if (origem != "abertura") bipe(modo)
             status = when (modo) {
                 "silencio" -> "IA em silêncio — ouvindo e registrando; diga a palavra para conversar."
-                "pausa" -> "Gravação em pausa — nada vai para o laudo. Diga \"assistente\" ou \"silêncio\" para voltar."
+                "pausa" -> "Gravação em pausa — vídeo parado, nada vai para o laudo. Diga \"assistente\" ou \"silêncio\" para voltar."
                 else -> "IA em conversa."
             }
         }
@@ -973,14 +973,44 @@ fun CaptureScreen() {
     }
 
     // Liga o vídeo dos óculos assim que a sessão abre e os óculos estão prontos.
-    LaunchedEffect(sessaoId, conectado, rtmpUrl) {
+    // iaModo entra nas chaves: em PAUSA o vídeo fica desligado (ver efeito
+    // abaixo) e, quando o perito diz a palavra de volta, este efeito roda de
+    // novo e religa o stream — o servidor abre outro segmento .flv e a
+    // consolidação junta tudo; o trecho da pausa simplesmente não existe.
+    var modoAnteriorDoVideo by remember { mutableStateOf("conversa") }
+    LaunchedEffect(sessaoId, conectado, rtmpUrl, iaModo) {
         val url = rtmpUrl
-        if (sessaoId != null && !videoLigado && url != null &&
+        val id = sessaoId
+        if (id != null && !videoLigado && url != null && iaModo != "pausa" &&
             (device !is MentraGlassesDevice || conectado)
         ) {
+            val retomando = modoAnteriorDoVideo == "pausa"
+            // Saindo da pausa: dá tempo de o stopStream anterior assentar nos óculos.
+            if (retomando) kotlinx.coroutines.delay(1_500)
             device.iniciarVideo(url)
             videoLigado = true
+            if (retomando) {
+                status = "Gravação retomada — vídeo dos óculos religado."
+                runCatching { backend.registrarEvento(id, "marcador", "retomada", "voz") }
+            }
         }
+        modoAnteriorDoVideo = iaModo
+    }
+
+    // PAUSA de verdade (campo 04/09: "pausa" só calava a IA e o vídeo seguia
+    // gravando tudo — o arquivo ficava enorme e o que o perito falava no
+    // intervalo ia junto). Agora a pausa CORTA o stream dos óculos; o áudio ao
+    // backend também para (abaixo, em onPcm). Só a ponte segue ouvindo, para
+    // reconhecer a palavra de volta — e ela descarta a transcrição em pausa.
+    LaunchedEffect(iaModo) {
+        if (iaModo != "pausa") return@LaunchedEffect
+        val id = sessaoId ?: return@LaunchedEffect
+        if (videoLigado) {
+            runCatching { device.pararVideo() }
+            videoLigado = false
+        }
+        status = "Gravação em pausa — vídeo dos óculos parado. Diga a palavra de volta para continuar."
+        runCatching { backend.registrarEvento(id, "marcador", "pausa", "voz") }
     }
 
     LaunchedEffect(sessaoId, conectado) {
@@ -1031,7 +1061,9 @@ fun CaptureScreen() {
             // caminhos (offline e IA) durante a fala + cauda de 400 ms.
             val iaFalando = ponteGemini?.estaFalando() == true
             if (!iaFalando) {
-                streamer.enviarPcm(pcm)
+                // Em PAUSA nada do que é dito sobe ao servidor (custódia/narração);
+                // a ponte continua ouvindo só para pegar a palavra de volta.
+                if (iaModo != "pausa") streamer.enviarPcm(pcm)
                 ponteGemini?.enviarPcm(pcm)
             }
         }
@@ -2056,7 +2088,7 @@ private fun CartaoAssistenteIa(
             TextoApoio(
                 when (modo) {
                     "silencio" -> "Ouvindo e registrando achados em silêncio. \"O que foi salvo?\" ela lê. Diga a palavra de conversa para ela voltar a falar."
-                    "pausa" -> "Gravação em pausa: nada do que for dito vai para o laudo e nenhum comando executa. Diga \"assistente\" ou \"silêncio\" para voltar."
+                    "pausa" -> "Gravação em pausa: o vídeo dos óculos está parado, nada do que for dito vai para o laudo e nenhum comando executa. Diga \"assistente\" ou \"silêncio\" para voltar."
                     else -> "Fale normalmente: ela responde, conduz o roteiro e registra os achados. Diga a palavra de silêncio para trabalhar sem interrupção."
                 },
             )
