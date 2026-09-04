@@ -223,7 +223,7 @@ fun CaptureScreen() {
      *  não definido (a IA está perguntando, ou o assistente está desligado). */
     var iaTrilha by remember { mutableStateOf<String?>(null) }
     var iaPerguntandoTrilha by remember { mutableStateOf(false) }
-    /** MODO da IA: conversa | silencio | privado (troca por palavra ou toque). */
+    /** MODO da IA: conversa | silencio | pausa (troca por palavra; toque é reserva). */
     var iaModo by remember { mutableStateOf("conversa") }
     /** Achados registrados pela IA nesta sessão (registrar_achado), para o cartão do laudo. */
     var achados by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -237,7 +237,7 @@ fun CaptureScreen() {
             when (tipo) {
                 "conversa" -> b.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 180)
                 "silencio" -> b.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 120)
-                "privado" -> b.startTone(android.media.ToneGenerator.TONE_PROP_NACK, 220)
+                "pausa" -> b.startTone(android.media.ToneGenerator.TONE_PROP_NACK, 220)
                 else -> b.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 90) // achado
             }
         }
@@ -337,7 +337,7 @@ fun CaptureScreen() {
             if (origem != "abertura") bipe(modo)
             status = when (modo) {
                 "silencio" -> "IA em silêncio — ouvindo e registrando; diga a palavra para conversar."
-                "privado" -> "Privado — microfone fechado. Toque em Conversar para voltar."
+                "pausa" -> "Gravação em pausa — nada vai para o laudo. Diga \"assistente\" ou \"silêncio\" para voltar."
                 else -> "IA em conversa."
             }
         }
@@ -1918,9 +1918,9 @@ private fun CartaoAssistenteIa(
     trilha: String?,
     /** a IA está na triagem, perguntando o tipo de exame ao perito */
     perguntandoTrilha: Boolean,
-    /** modo da IA: conversa | silencio | privado */
+    /** modo da IA: conversa | silencio | pausa */
     modo: String,
-    /** troca de modo pelo toque (único caminho para sair de privado) */
+    /** troca de modo pelo toque (reserva — o perito de luvas usa a voz) */
     onModo: (String) -> Unit,
     /** diagnóstico da saída de voz ("→ Mentra Live · 12 trecho(s)", "ERRO: ...") */
     voz: String,
@@ -1939,7 +1939,7 @@ private fun CartaoAssistenteIa(
             etiqueta = when {
                 !ativo -> "desligado"
                 perguntandoTrilha -> "perguntando o exame"
-                modo == "privado" -> "privado — mic fechado"
+                modo == "pausa" -> "gravação em pausa"
                 modo == "silencio" -> "silêncio — ouvindo e registrando"
                 olhandoAgora -> "olhando agora"
                 else -> "em conversa"
@@ -1947,7 +1947,7 @@ private fun CartaoAssistenteIa(
             tomEtiqueta = when {
                 !ativo -> Tom.NEUTRO
                 perguntandoTrilha -> Tom.ATENCAO
-                modo == "privado" -> Tom.ERRO
+                modo == "pausa" -> Tom.ERRO
                 modo == "silencio" -> Tom.NEUTRO
                 else -> Tom.OK
             },
@@ -1989,7 +1989,7 @@ private fun CartaoAssistenteIa(
             TextoApoio(
                 when (modo) {
                     "silencio" -> "Ouvindo e registrando achados em silêncio. \"O que foi salvo?\" ela lê. Diga a palavra de conversa para ela voltar a falar."
-                    "privado" -> "Microfone fechado: nada é ouvido nem gravado. Toque em Conversar para voltar."
+                    "pausa" -> "Gravação em pausa: nada do que for dito vai para o laudo e nenhum comando executa. Diga \"assistente\" ou \"silêncio\" para voltar."
                     else -> "Fale normalmente: ela responde, conduz o roteiro e registra os achados. Diga a palavra de silêncio para trabalhar sem interrupção."
                 },
             )
@@ -2000,8 +2000,8 @@ private fun CartaoAssistenteIa(
             else BotaoContorno("Conversar", modifier = Modifier.weight(1f), onClick = { onModo("conversa") })
             if (modo == "silencio") BotaoTonal("Silêncio", modifier = Modifier.weight(1f), onClick = {})
             else BotaoContorno("Silêncio", modifier = Modifier.weight(1f), onClick = { onModo("silencio") })
-            if (modo == "privado") BotaoTonal("Privado", modifier = Modifier.weight(1f), onClick = {})
-            else BotaoContorno("Privado", tom = Tom.ERRO, modifier = Modifier.weight(1f), onClick = { onModo("privado") })
+            if (modo == "pausa") BotaoTonal("Pausa", modifier = Modifier.weight(1f), onClick = {})
+            else BotaoContorno("Pausa", tom = Tom.ERRO, modifier = Modifier.weight(1f), onClick = { onModo("pausa") })
         }
         Spacer(Modifier.height(12.dp))
         BotaoContorno(

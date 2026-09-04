@@ -60,12 +60,12 @@ class PonteGemini(
     /** Trilha definida (id, nome, origem 'perito'|'app'|'memoria'): a sessão
      *  de trabalho está de pé com o roteiro certo. */
     var onTrilha: (id: String, nome: String, origem: String) -> Unit = { _, _, _ -> }
-    /** MODO de fala da IA: "conversa" | "silencio" | "privado" (+ origem
+    /** MODO de fala da IA: "conversa" | "silencio" | "pausa" (+ origem
      *  'voz' | 'toque' | 'abertura'). Substitui o chamado por nome. */
     var onModo: (modo: String, origem: String) -> Unit = { _, _ -> }
     /** Achado registrado pela IA (registrar_achado): dado estruturado para o laudo. */
     var onAchado: (JSONObject) -> Unit = {}
-    /** Modo atual, para o app decidir (ex.: não mandar PCM em privado). */
+    /** Modo atual (o cartão mostra; em pausa o PCM continua indo — é a ponte quem descarta). */
     @Volatile var modo: String = "conversa"
         private set
     /** Diagnóstico da SAÍDA DE VOZ, em texto curto para o cartão: por onde o
@@ -350,8 +350,8 @@ class PonteGemini(
         }
     }
 
-    /** Troca de modo pelo TOQUE (botões do cartão). É o único jeito de sair
-     *  de "privado" — com o microfone fechado, ninguém ouve a palavra. */
+    /** Troca de modo pelo TOQUE (botões do cartão) — reserva; o perito de
+     *  luvas troca pela voz. */
     fun definirModo(novo: String) {
         runCatching { ws?.send(JSONObject().put("tipo", "modo").put("modo", novo).toString()) }
     }
@@ -362,8 +362,9 @@ class PonteGemini(
     /** Cópia do PCM16/16kHz dos óculos. Barato: se a ponte não está pronta, ignora.
      *  HALF-DUPLEX: enquanto o assistente fala, o mic não sobe — ele não se ouve. */
     fun enviarPcm(pcm: ByteArray) {
-        // Privado: a ponte já descarta, mas não faz sentido nem gastar rede.
-        if (!pronto || estaFalando() || modo == "privado") return
+        // Em PAUSA o áudio continua indo: é o Gemini quem transcreve, e sem
+        // isso ninguém ouviria a palavra de volta. A ponte descarta o resto.
+        if (!pronto || estaFalando()) return
         val quadro = ByteArray(pcm.size + 1)
         quadro[0] = 0x01
         System.arraycopy(pcm, 0, quadro, 1, pcm.size)
