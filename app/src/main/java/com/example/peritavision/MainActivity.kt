@@ -257,6 +257,9 @@ fun CaptureScreen() {
     var ultimaCapturaMs by remember { mutableStateOf(0L) }
     /** Quando a IA pediu para encerrar pela 1ª vez (aguardando confirmação). */
     var pedidoFinalizarMs by remember { mutableStateOf(0L) }
+    /** Encerramento em curso — trava propria, para o pedido nao ser engolido
+     *  pelo `ocupado` de outra operacao (ver finalizarSessao). */
+    var finalizando by remember { mutableStateOf(false) }
     /** Fala do perito acumulada para a NARRAÇÃO do laudo (tudo vai; o cartão
      *  na tela mostra só as perguntas com o chamado "PeritaVision"). */
     var narracaoPendente by remember { mutableStateOf("") }
@@ -650,16 +653,54 @@ fun CaptureScreen() {
         }
     }
 
-    /** Fecha a sessao; o backend monta o laudo. */
-    fun finalizarSessao() {
-        val id = sessaoId ?: return
-        if (ocupado) return
+    /**
+     * Fecha a sessao; o backend monta o laudo. E DEVOLVE O RESULTADO REAL em
+     * `aoTerminar` — quem pediu (a IA) so anuncia encerramento depois disso.
+     *
+     * Campo 04/09: o perito confirmou o encerramento, a IA disse que estava
+     * finalizado e a tela FICOU NA BANCADA. Duas causas, as duas aqui:
+     *   1. `if (ocupado) return` engolia o pedido em silencio quando outra
+     *      chamada estava em curso — nada acontecia e ninguem sabia;
+     *   2. quem chamava respondia ok=true ANTES do backend responder, entao
+     *      um erro (401, 500, rede) virava so um texto na barra de status,
+     *      que o perito de luvas nunca le.
+     * Agora: espera a vez em vez de desistir, e o sucesso/erro volta por voz.
+     */
+    fun finalizarSessao(aoTerminar: ((Boolean, String) -> Unit)? = null) {
+        val id = sessaoId
+        if (id == null) {
+            aoTerminar?.invoke(false, "não há perícia aberta neste tablet")
+            return
+        }
+        if (finalizando) {
+            aoTerminar?.invoke(false, "o encerramento já está em andamento; aguarde")
+            return
+        }
+        finalizando = true
         escopo.launch {
-            ocupado = true
+            // So devolve o `ocupado` se foi ESTE encerramento que o tomou —
+            // senao liberaria a trava de outra operacao em curso.
+            var tomouOcupado = false
             try {
+                // Espera a vez (abrir sessao pode estar em curso) em vez de
+                // devolver sem fazer nada.
+                var esperou = 0
+                while (ocupado && esperou < 20_000) {
+                    status = "Aguardando a operação em curso para finalizar..."
+                    kotlinx.coroutines.delay(250); esperou += 250
+                }
+                if (ocupado) {
+                    status = "Não deu para finalizar: o app está ocupado."
+                    aoTerminar?.invoke(false, "o aplicativo está ocupado com outra operação; peça para o perito tentar de novo")
+                    return@launch
+                }
+                ocupado = true
+                tomouOcupado = true
                 if (videoLigado) {
                     status = "Encerrando o vídeo dos óculos..."
-                    device.pararVideo()
+                    // Falha aqui nao pode travar o encerramento: o RTMP cai
+                    // sozinho quando a sessao fecha no servidor.
+                    runCatching { device.pararVideo() }
                     videoLigado = false
                     kotlinx.coroutines.delay(1500)
                 }
@@ -667,18 +708,41 @@ fun CaptureScreen() {
                 // Última fala ainda no buffer entra na narração antes do laudo.
                 if (narracaoPendente.isNotBlank()) {
                     narracoes = narracoes + narracaoPendente.trim()
-                    backend.narrar(id, narracaoPendente)
+                    runCatching { backend.narrar(id, narracaoPendente) }
                     narracaoPendente = ""
                 }
                 laudoId = backend.finalizarSessao(id)
+                // Confirma para quem pediu ANTES de fechar a ponte (fechar a
+                // sessao derruba o WebSocket da IA no efeito de sessaoId).
+                aoTerminar?.invoke(true, "sessão encerrada; o laudo entrou em processamento")
+                status = "Laudo gerado — revise e baixe no site do PeritaVision"
+                falarSeSemIa("Sessão finalizada. Laudo em processamento.")
+                // Deixa a IA anunciar o encerramento antes de o socket cair.
+                if (aoTerminar != null) kotlinx.coroutines.delay(2_500)
+                // VOLTA PARA A PRIMEIRA TELA, pronta para a proxima pericia.
                 sessaoId = null
                 rtmpUrl = null
-                falarSeSemIa("Sessão finalizada. Laudo em processamento.")
-                status = "Laudo gerado — revise e baixe no site do PeritaVision"
+                protocolo = ""
+                fichaLacre = null
+                fotosEnviadas = 0
+                pedidoFinalizarMs = 0L
+                bipe("conversa")
             } catch (e: Exception) {
-                status = "Erro ao finalizar: ${e.message}"
+                // A pericia CONTINUA ABERTA. Libera a retentativa imediata
+                // (sem o rito de dois tempos de novo) e avisa por voz.
+                pedidoFinalizarMs = System.currentTimeMillis()
+                val motivo = e.message ?: "erro desconhecido"
+                status = "Erro ao finalizar: $motivo"
+                falarSeSemIa("Não consegui finalizar. A perícia continua aberta.")
+                aoTerminar?.invoke(
+                    false,
+                    "NÃO encerrou — a perícia continua aberta. Motivo: $motivo. " +
+                        "Diga isso ao perito em voz alta e pergunte se quer tentar de novo; " +
+                        "a próxima chamada de finalizar_sessao já executa, sem confirmar outra vez.",
+                )
             } finally {
-                ocupado = false
+                if (tomouOcupado) ocupado = false
+                finalizando = false
             }
         }
     }
@@ -896,8 +960,11 @@ fun CaptureScreen() {
                         )
                     } else {
                         pedidoFinalizarMs = 0L
-                        finalizarSessao()
-                        ponteGemini?.responderComando(id, nome, true, "sessão sendo finalizada; laudo entrará em processamento")
+                        // Responde SO com o resultado real (campo 04/09: a IA
+                        // anunciava encerramento e a tela ficava na bancada).
+                        finalizarSessao { ok, detalhe ->
+                            ponteGemini?.responderComando(id, nome, ok, detalhe)
+                        }
                     }
                 }
                 else -> ponteGemini?.responderComando(id, nome, false, "função desconhecida")
@@ -1185,7 +1252,7 @@ fun CaptureScreen() {
                 gravandoAudio = !gravandoAudio
             },
             onFinalizar = if (temSessao) ({ finalizarSessao() }) else null,
-            finalizando = ocupado,
+            finalizando = ocupado || finalizando,
         )
     }
     // O que os óculos estão vendo, ao vivo (só no modo MENTRA — no PHONE a
