@@ -174,12 +174,13 @@ fun TelaConfiguracoes(
                 TextoApoio(
                     "A IA não precisa mais de \"PeritaVision\" a cada frase. Diga a palavra no " +
                         "INÍCIO da frase (ou sozinha) e ela muda de modo — e fica nele até você trocar. " +
-                        "Prefira palavras curtas que não apareçam na fala normal da bancada.",
+                        "Tudo por voz: o perito de luvas não toca na tela. Prefira palavras curtas que não " +
+                        "apareçam na fala normal da bancada.",
                 )
                 Spacer(Modifier.height(10.dp))
                 var pConversa by remember { mutableStateOf(config.palavraConversa) }
                 var pSilencio by remember { mutableStateOf(config.palavraSilencio) }
-                var pPrivado by remember { mutableStateOf(config.palavraPrivado) }
+                var pPausa by remember { mutableStateOf(config.palavraPausa) }
                 val padrao = catalogo.palavrasPadrao
                 CampoPv(
                     valor = pConversa,
@@ -196,11 +197,15 @@ fun TelaConfiguracoes(
                 TextoApoio("A IA não fala, mas continua ouvindo, transcrevendo para o laudo e registrando achados. \"O que foi salvo?\" ela lê mesmo assim.")
                 Spacer(Modifier.height(8.dp))
                 CampoPv(
-                    valor = pPrivado,
-                    onValueChange = { pPrivado = it; config.palavraPrivado = it },
-                    rotulo = "Privado (padrão: ${padrao["privado"] ?: "privado"})",
+                    valor = pPausa,
+                    onValueChange = { pPausa = it; config.palavraPausa = it },
+                    rotulo = "Pausar a gravação (padrão: ${padrao["pausa"] ?: "pausa"})",
                 )
-                TextoApoio("Microfone fechado: nada é ouvido nem gravado. Para sair, toque em \"Conversar\" no cartão do assistente.", Tom.ATENCAO)
+                TextoApoio(
+                    "Para quando o perito vai fazer outra coisa: nada do que for dito vai para o laudo, " +
+                        "nenhum comando executa e a IA não fala. Ela continua ouvindo SÓ para reconhecer a " +
+                        "palavra de volta — diga \"assistente\" ou \"silêncio\" para retomar. Tudo por voz, sem tocar na tela.",
+                )
             }
 
             // ── MODELO ──────────────────────────────────────────────────────
