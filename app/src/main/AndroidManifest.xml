@@ -59,7 +59,8 @@
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.Peritavision"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden|uiMode|fontScale">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

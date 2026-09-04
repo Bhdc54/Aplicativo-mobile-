@@ -225,6 +225,13 @@ fun CaptureScreen() {
     var iaPerguntandoTrilha by remember { mutableStateOf(false) }
     /** MODO da IA: conversa | silencio | pausa (troca por palavra; toque é reserva). */
     var iaModo by remember { mutableStateOf("conversa") }
+    /** QUEM MANDA NA GRAVAÇÃO. Separado do iaModo de propósito: o iaModo é
+     *  espelho do servidor, e o servidor devolve "conversa" toda vez que a
+     *  sessão do Gemini (re)abre — reconexão de Wi-Fi ou redeploy da ponte
+     *  cancelavam a pausa sozinhos, religavam o vídeo e gravavam um marcador
+     *  de "retomada por voz" que ninguém pediu (revisão 04/09). Só troca de
+     *  modo pedida pelo perito (voz ou toque) mexe aqui. */
+    var gravacaoPausada by remember { mutableStateOf(false) }
     /** Achados registrados pela IA nesta sessão (registrar_achado), para o cartão do laudo. */
     var achados by remember { mutableStateOf<List<String>>(emptyList()) }
     // Bipes curtos no lugar de fala para confirmar modo e achado (em silêncio
@@ -336,9 +343,19 @@ fun CaptureScreen() {
         )
         ponte.onStatus = { msg -> status = msg }
         ponte.onModo = { modo, origem ->
-            iaModo = modo
-            if (origem != "abertura") bipe(modo)
-            status = when (modo) {
+            if (origem != "abertura") {
+                iaModo = modo
+                bipe(modo)
+                gravacaoPausada = modo == "pausa"
+            } else if (gravacaoPausada) {
+                // Sessão Gemini reabriu (reconexão, troca de trilha, redeploy)
+                // e o servidor voltou para conversa. A gravação continua
+                // pausada: reafirma para a ponte e não religa nada.
+                ponteGemini?.definirModo("pausa")
+            } else {
+                iaModo = modo
+            }
+            status = when (iaModo) {
                 "silencio" -> "IA em silêncio — ouvindo e registrando; diga a palavra para conversar."
                 "pausa" -> "Gravação em pausa — vídeo parado, nada vai para o laudo. Diga \"assistente\" ou \"silêncio\" para voltar."
                 else -> "IA em conversa."
@@ -451,6 +468,7 @@ fun CaptureScreen() {
             iaTrilha = null
             iaPerguntandoTrilha = false
             iaModo = "conversa"
+            gravacaoPausada = false
             achados = emptyList()
             iaVoz = ""
             telaApagada = false
@@ -510,20 +528,31 @@ fun CaptureScreen() {
      *  contexto da IA precisa disso — faltar o texto e faltar a informação de
      *  que não existe requisição são coisas diferentes para quem conduz. */
     var avisoRequisicao by remember { mutableStateOf<String?>(null) }
+    /** true enquanto o documento está sendo baixado. O contexto NÃO sai nesse
+     *  meio: sem isto o assistente abria a perícia anunciando "não há
+     *  requisição anexada" e, quando o texto chegava, já não fazia o resumo
+     *  de abertura (o prompt só o faz na primeira vez). */
+    var requisicaoCarregando by remember { mutableStateOf(false) }
     LaunchedEffect(casoAtena) {
         textoRequisicao = null
         avisoRequisicao = null
+        requisicaoCarregando = false
         val caso = casoAtena ?: return@LaunchedEffect
         val docId = caso.documentoId
         if (docId.isNullOrBlank()) {
             avisoRequisicao = "o caso não tem documento anexado no Atena"
             return@LaunchedEffect
         }
-        // Falha aqui não pode travar nada: sem o texto, o assistente segue
-        // com o resto do contexto — mas sabendo que ficou sem a requisição.
-        val r = backend.textoDocumento(docId)
-        textoRequisicao = r.texto
-        avisoRequisicao = if (r.texto == null) (r.aviso ?: "documento do Atena ilegível") else null
+        requisicaoCarregando = true
+        try {
+            // Falha aqui não pode travar nada: sem o texto, o assistente segue
+            // com o resto do contexto — mas sabendo que ficou sem a requisição.
+            val r = backend.textoDocumento(docId)
+            textoRequisicao = r.texto
+            avisoRequisicao = if (r.texto == null) (r.aviso ?: "documento do Atena ilegível") else null
+        } finally {
+            requisicaoCarregando = false
+        }
     }
 
     // ── O assistente IA "vê" e "conhece o caso" ─────────────────────────────
@@ -542,8 +571,10 @@ fun CaptureScreen() {
             if (!iaEnxergando) ponteGemini?.definirVideo(urlVisao)
         }
     }
-    LaunchedEffect(ponteGemini, fichaLacre, casoAtena, textoRequisicao, avisoRequisicao, protocolo) {
+    LaunchedEffect(ponteGemini, fichaLacre, casoAtena, textoRequisicao, avisoRequisicao, requisicaoCarregando, protocolo) {
         if (ponteGemini == null) return@LaunchedEffect
+        // Espera o documento decidir se existe ou não antes de abrir a boca.
+        if (requisicaoCarregando) return@LaunchedEffect
         val f = fichaLacre
         val a = casoAtena
         val texto = buildString {
@@ -699,6 +730,10 @@ fun CaptureScreen() {
             aoTerminar?.invoke(false, "o encerramento já está em andamento; aguarde")
             return
         }
+        // Recusa não pode voltar o rito para a estaca zero: quem chama zera o
+        // pedidoFinalizarMs antes, e a próxima tentativa perguntaria "confirma
+        // o encerramento?" de novo, logo depois de o perito ter confirmado.
+        pedidoFinalizarMs = System.currentTimeMillis()
         finalizando = true
         escopo.launch {
             // So devolve o `ocupado` se foi ESTE encerramento que o tomou —
@@ -714,6 +749,7 @@ fun CaptureScreen() {
                 }
                 if (ocupado) {
                     status = "Não deu para finalizar: o app está ocupado."
+                    vozFeedback.falar("Não consegui finalizar agora. Tente de novo.")
                     aoTerminar?.invoke(false, "o aplicativo está ocupado com outra operação; peça para o perito tentar de novo")
                     return@launch
                 }
@@ -729,10 +765,14 @@ fun CaptureScreen() {
                 }
                 status = "Finalizando sessão..."
                 // Última fala ainda no buffer entra na narração antes do laudo.
-                if (narracaoPendente.isNotBlank()) {
-                    narracoes = narracoes + narracaoPendente.trim()
-                    runCatching { backend.narrar(id, narracaoPendente) }
-                    narracaoPendente = ""
+                // Limpa ANTES de mandar: o laço de narração acorda a cada
+                // 700 ms e gravava o mesmo trecho outra vez enquanto o POST
+                // estava em voo — a frase saía duplicada nas considerações.
+                val ultimaFala = narracaoPendente.trim()
+                narracaoPendente = ""
+                if (ultimaFala.isNotBlank()) {
+                    narracoes = narracoes + ultimaFala
+                    runCatching { backend.narrar(id, ultimaFala) }
                 }
                 laudoId = backend.finalizarSessao(id)
                 // Confirma para quem pediu ANTES de fechar a ponte (fechar a
@@ -740,8 +780,17 @@ fun CaptureScreen() {
                 aoTerminar?.invoke(true, "sessão encerrada; o laudo entrou em processamento")
                 status = "Laudo gerado — revise e baixe no site do PeritaVision"
                 falarSeSemIa("Sessão finalizada. Laudo em processamento.")
-                // Deixa a IA anunciar o encerramento antes de o socket cair.
-                if (aoTerminar != null) kotlinx.coroutines.delay(2_500)
+                // Espera a IA TERMINAR de anunciar antes de fechar a ponte:
+                // com 2,5 s fixos o encerrar() cortava a frase no meio ("sessão
+                // encerra—") e o perito de luvas não sabia se tinha encerrado.
+                if (aoTerminar != null) {
+                    val ponte = ponteGemini
+                    kotlinx.coroutines.delay(1_200) // dá tempo de o áudio começar
+                    var esperando = 0
+                    while (ponte?.estaFalando() == true && esperando < 15_000) {
+                        kotlinx.coroutines.delay(250); esperando += 250
+                    }
+                }
                 // VOLTA PARA A PRIMEIRA TELA, pronta para a proxima pericia.
                 sessaoId = null
                 rtmpUrl = null
@@ -756,7 +805,10 @@ fun CaptureScreen() {
                 pedidoFinalizarMs = System.currentTimeMillis()
                 val motivo = e.message ?: "erro desconhecido"
                 status = "Erro ao finalizar: $motivo"
-                falarSeSemIa("Não consegui finalizar. A perícia continua aberta.")
+                // vozFeedback direto, NÃO falarSeSemIa: com a IA ligada o
+                // falarSeSemIa cala, e o perito ficava sem nenhum retorno de
+                // um encerramento que falhou (só um texto na barra de status).
+                vozFeedback.falar("Não consegui finalizar. A perícia continua aberta.")
                 aoTerminar?.invoke(
                     false,
                     "NÃO encerrou — a perícia continua aberta. Motivo: $motivo. " +
@@ -788,6 +840,10 @@ fun CaptureScreen() {
                 is GlassesEvent.Conexao -> {
                     conectado = evento.conectado
                     conectando = false
+                    // Caiu o BLE/Wi-Fi: o stream morreu com ele. Sem zerar
+                    // isto o vídeo NUNCA religava na reconexão (o efeito exige
+                    // !videoLigado) e o cartão seguia mostrando "AO VIVO".
+                    if (!evento.conectado) videoLigado = false
                     status = if (evento.conectado) "Óculos conectado" else "Óculos desconectado"
                     // WI-FI AUTOMÁTICO: conectou e há rede salva → envia sem
                     // pedir nada. Espera 2,5 s para os óculos reportarem o
@@ -1000,14 +1056,14 @@ fun CaptureScreen() {
     // abaixo) e, quando o perito diz a palavra de volta, este efeito roda de
     // novo e religa o stream — o servidor abre outro segmento .flv e a
     // consolidação junta tudo; o trecho da pausa simplesmente não existe.
-    var modoAnteriorDoVideo by remember { mutableStateOf("conversa") }
-    LaunchedEffect(sessaoId, conectado, rtmpUrl, iaModo) {
+    var estavaPausado by remember { mutableStateOf(false) }
+    LaunchedEffect(sessaoId, conectado, rtmpUrl, gravacaoPausada) {
         val url = rtmpUrl
         val id = sessaoId
-        if (id != null && !videoLigado && url != null && iaModo != "pausa" &&
+        if (id != null && !videoLigado && url != null && !gravacaoPausada &&
             (device !is MentraGlassesDevice || conectado)
         ) {
-            val retomando = modoAnteriorDoVideo == "pausa"
+            val retomando = estavaPausado
             // Saindo da pausa: dá tempo de o stopStream anterior assentar nos óculos.
             if (retomando) kotlinx.coroutines.delay(1_500)
             device.iniciarVideo(url)
@@ -1017,7 +1073,7 @@ fun CaptureScreen() {
                 runCatching { backend.registrarEvento(id, "marcador", "retomada", "voz") }
             }
         }
-        modoAnteriorDoVideo = iaModo
+        estavaPausado = gravacaoPausada
     }
 
     // PAUSA de verdade (campo 04/09: "pausa" só calava a IA e o vídeo seguia
@@ -1025,8 +1081,8 @@ fun CaptureScreen() {
     // intervalo ia junto). Agora a pausa CORTA o stream dos óculos; o áudio ao
     // backend também para (abaixo, em onPcm). Só a ponte segue ouvindo, para
     // reconhecer a palavra de volta — e ela descarta a transcrição em pausa.
-    LaunchedEffect(iaModo) {
-        if (iaModo != "pausa") return@LaunchedEffect
+    LaunchedEffect(gravacaoPausada) {
+        if (!gravacaoPausada) return@LaunchedEffect
         val id = sessaoId ?: return@LaunchedEffect
         if (videoLigado) {
             runCatching { device.pararVideo() }
@@ -1086,7 +1142,7 @@ fun CaptureScreen() {
             if (!iaFalando) {
                 // Em PAUSA nada do que é dito sobe ao servidor (custódia/narração);
                 // a ponte continua ouvindo só para pegar a palavra de volta.
-                if (iaModo != "pausa") streamer.enviarPcm(pcm)
+                if (!gravacaoPausada) streamer.enviarPcm(pcm)
                 ponteGemini?.enviarPcm(pcm)
             }
         }
@@ -1286,7 +1342,7 @@ fun CaptureScreen() {
             fotosEnviadas = fotosEnviadas,
             temLaudo = laudoId != null,
             onIniciar = { iniciarSessao() },
-            onFinalizar = { finalizarSessao() },
+            onFinalizar = { finalizarSessao { ok, detalhe -> if (!ok) vozFeedback.falar("Não encerrou. $detalhe") } },
         )
     }
     val cartaoCaptura: @Composable () -> Unit = {
@@ -1306,7 +1362,7 @@ fun CaptureScreen() {
                 if (gravandoAudio) device.pararAudio() else device.iniciarAudio()
                 gravandoAudio = !gravandoAudio
             },
-            onFinalizar = if (temSessao) ({ finalizarSessao() }) else null,
+            onFinalizar = if (temSessao) ({ finalizarSessao { ok, detalhe -> if (!ok) vozFeedback.falar("Não encerrou. $detalhe") } }) else null,
             finalizando = ocupado || finalizando,
         )
     }
@@ -1348,7 +1404,13 @@ fun CaptureScreen() {
             trilha = iaTrilha,
             perguntandoTrilha = iaPerguntandoTrilha,
             modo = iaModo,
-            onModo = { m -> ponteGemini?.definirModo(m) },
+            onModo = { m ->
+                // Com a IA desligada os botões continuam valendo: senão o
+                // perito que desligou o assistente ficava sem NENHUMA forma
+                // de pausar a gravação (nem voz, nem toque).
+                if (ponteGemini != null) ponteGemini?.definirModo(m)
+                else { iaModo = m; gravacaoPausada = m == "pausa" }
+            },
             voz = iaVoz,
             perito = iaPerito,
             resposta = iaResposta,

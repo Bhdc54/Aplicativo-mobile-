@@ -245,9 +245,15 @@ class BackendClient(var baseUrl: String) {
     }
 
     /** Finaliza a sessao; o backend monta o laudo e devolve o id dele. */
-    suspend fun finalizarSessao(sessaoId: String): String {
-        val r = postJson("/v1/sessoes/$sessaoId/finalizar", JSONObject())
-        return r.optString("laudoId")
+    /** 90 s de leitura, não os 20 s do resto: no /finalizar o backend ainda
+     *  tenta recuperar fotos pendentes a partir do vídeo, e isso passa de 20 s
+     *  numa perícia longa. Com o timeout curto o app dizia "não encerrou" e
+     *  ficava na bancada enquanto o servidor encerrava normalmente. */
+    suspend fun finalizarSessao(sessaoId: String): String? {
+        val r = postJson("/v1/sessoes/$sessaoId/finalizar", JSONObject(), leituraMs = 90_000)
+        // optString devolve "" quando o campo falta, e "" != null fazia o
+        // cartão anunciar "laudo pronto" sem id nenhum.
+        return r.optString("laudoId").takeIf { it.isNotBlank() }
     }
 
     /** Emite o webhook para os óculos fotografarem o LACRE (pré-sessão). */
@@ -350,11 +356,11 @@ class BackendClient(var baseUrl: String) {
     // Encanamento HTTP
     // ------------------------------------------------------------------------
 
-    private fun abrir(url: URL, metodo: String): HttpURLConnection =
+    private fun abrir(url: URL, metodo: String, leituraMs: Int = 20_000): HttpURLConnection =
         (url.openConnection() as HttpURLConnection).apply {
             requestMethod = metodo
             connectTimeout = 10_000
-            readTimeout = 20_000
+            readTimeout = leituraMs
             setRequestProperty("Accept", "application/json")
         }
 
@@ -362,15 +368,17 @@ class BackendClient(var baseUrl: String) {
         caminho: String,
         corpo: JSONObject,
         autenticado: Boolean = true,
-    ): JSONObject = if (autenticado) comReautenticacao { postJsonCru(caminho, corpo, true) }
-        else postJsonCru(caminho, corpo, false)
+        leituraMs: Int = 20_000,
+    ): JSONObject = if (autenticado) comReautenticacao { postJsonCru(caminho, corpo, true, leituraMs) }
+        else postJsonCru(caminho, corpo, false, leituraMs)
 
     private suspend fun postJsonCru(
         caminho: String,
         corpo: JSONObject,
         autenticado: Boolean,
+        leituraMs: Int = 20_000,
     ): JSONObject = withContext(Dispatchers.IO) {
-        val conn = abrir(URL(baseUrl.trimEnd('/') + caminho), "POST").apply {
+        val conn = abrir(URL(baseUrl.trimEnd('/') + caminho), "POST", leituraMs).apply {
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             if (autenticado) autenticar(this)
             doOutput = true

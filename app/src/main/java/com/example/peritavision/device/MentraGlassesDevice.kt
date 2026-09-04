@@ -471,6 +471,11 @@ class MentraGlassesDevice(
     // VIDEO DA SESSAO — os oculos transmitem RTMP direto ao servidor (startStream).
 
     private var streamAtivo = false
+    /** Cresce a cada iniciarVideo. O laço de insistência do pararVideo compara
+     *  com a geração que ele capturou: sem isso, a 2ª tentativa de stop (2 s
+     *  depois) matava o stream que a RETOMADA da pausa acabou de abrir. */
+    private var geracaoVideo = 0
+    private var tarefaIniciarVideo: kotlinx.coroutines.Job? = null
 
     override fun iniciarVideo(urlStream: String?) {
         if (urlStream.isNullOrBlank()) {
@@ -484,7 +489,13 @@ class MentraGlassesDevice(
         if (!wifiConectado) {
             _eventos.tryEmit(GlassesEvent.Aviso("óculos sem Wi-Fi: o vídeo só sobe quando o Wi-Fi conectar"))
         }
-        scope.launch {
+        // streamAtivo ANTES do launch: startStream leva segundos negociando com
+        // os óculos, e um pararVideo nessa janela caía no `if (!streamAtivo)
+        // return` — a pausa dizia na tela que parou e o stream seguia vivo a
+        // pausa inteira, gravando tudo (revisão 04/09).
+        streamAtivo = true
+        geracaoVideo += 1
+        tarefaIniciarVideo = scope.launch {
             try {
                 _eventos.tryEmit(GlassesEvent.Aviso("iniciando vídeo dos óculos..."))
                 sdk.startStream(
@@ -500,9 +511,9 @@ class MentraGlassesDevice(
                         video = StreamVideoConfig(width = 960, height = 540, bitrate = 1_200_000, fps = 15),
                     )
                 )
-                streamAtivo = true
                 _eventos.tryEmit(GlassesEvent.GravacaoIniciada(TipoEvidencia.VIDEO))
             } catch (e: Exception) {
+                streamAtivo = false
                 _eventos.tryEmit(GlassesEvent.Erro("vídeo dos óculos: ${e.message}"))
             }
         }
@@ -511,10 +522,18 @@ class MentraGlassesDevice(
     override fun pararVideo() {
         if (!streamAtivo) return
         streamAtivo = false
+        // Cancela um startStream ainda em negociação: senão ele termina depois
+        // do stop e deixa o stream de pé.
+        tarefaIniciarVideo?.cancel()
+        val minhaGeracao = geracaoVideo
         scope.launch {
             // Os óculos às vezes perdem o primeiro stop — insiste até 3 vezes.
             var parou = false
             for (tentativa in 1..3) {
+                if (geracaoVideo != minhaGeracao) {
+                    Log.w(TAG, "stopStream abortado: o vídeo já foi religado (geração ${geracaoVideo})")
+                    return@launch
+                }
                 try {
                     sdk.stopStream()
                     parou = true
