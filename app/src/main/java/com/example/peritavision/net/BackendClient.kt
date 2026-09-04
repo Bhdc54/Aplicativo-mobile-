@@ -160,11 +160,21 @@ class BackendClient(var baseUrl: String) {
         )
     }
 
-    /** Texto extraído do PDF da requisição (documento principal do Atena);
-     *  null quando o documento não tem texto extraível (ex.: digitalizado). */
-    suspend fun textoDocumento(documentoId: String): String? {
-        val r = getJson("/v1/casos/documento/$documentoId/texto")
-        return r.optString("texto").takeIf { it.isNotBlank() }
+    /** Requisição do Atena: o texto e, quando não deu, o MOTIVO. O motivo vai
+     *  para o contexto da IA — sem ele o assistente só ficava sem o texto e
+     *  não tinha como dizer ao perito que não havia requisição. */
+    data class Requisicao(val texto: String?, val aviso: String?)
+
+    suspend fun textoDocumento(documentoId: String): Requisicao {
+        return try {
+            val r = getJson("/v1/casos/documento/$documentoId/texto")
+            Requisicao(
+                r.optString("texto").takeIf { it.isNotBlank() },
+                r.optString("aviso").takeIf { it.isNotBlank() },
+            )
+        } catch (e: Exception) {
+            Requisicao(null, e.message ?: "falha ao baixar o documento no Atena")
+        }
     }
 
     /** Pega o primeiro perfil disponivel (MVP: so existe um). */

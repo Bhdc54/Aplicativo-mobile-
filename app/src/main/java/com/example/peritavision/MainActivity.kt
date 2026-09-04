@@ -504,14 +504,26 @@ fun CaptureScreen() {
     LaunchedEffect(sessaoId) { if (sessaoId == null) casoAtena = null }
     // Sessão nova → a lista de narrações da tela começa do zero.
     LaunchedEffect(sessaoId) { if (sessaoId != null) narracoes = emptyList() }
-    /** Texto extraído do PDF da requisição — o que a autoridade pediu. */
+    /** Texto da requisição do Atena — o que a autoridade pediu. */
     var textoRequisicao by remember { mutableStateOf<String?>(null) }
+    /** Por que NÃO há texto: sem documento no caso, ou documento ilegível. O
+     *  contexto da IA precisa disso — faltar o texto e faltar a informação de
+     *  que não existe requisição são coisas diferentes para quem conduz. */
+    var avisoRequisicao by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(casoAtena) {
         textoRequisicao = null
-        val docId = casoAtena?.documentoId ?: return@LaunchedEffect
+        avisoRequisicao = null
+        val caso = casoAtena ?: return@LaunchedEffect
+        val docId = caso.documentoId
+        if (docId.isNullOrBlank()) {
+            avisoRequisicao = "o caso não tem documento anexado no Atena"
+            return@LaunchedEffect
+        }
         // Falha aqui não pode travar nada: sem o texto, o assistente segue
-        // com o resto do contexto normalmente.
-        textoRequisicao = runCatching { backend.textoDocumento(docId) }.getOrNull()
+        // com o resto do contexto — mas sabendo que ficou sem a requisição.
+        val r = backend.textoDocumento(docId)
+        textoRequisicao = r.texto
+        avisoRequisicao = if (r.texto == null) (r.aviso ?: "documento do Atena ilegível") else null
     }
 
     // ── O assistente IA "vê" e "conhece o caso" ─────────────────────────────
@@ -530,7 +542,7 @@ fun CaptureScreen() {
             if (!iaEnxergando) ponteGemini?.definirVideo(urlVisao)
         }
     }
-    LaunchedEffect(ponteGemini, fichaLacre, casoAtena, textoRequisicao, protocolo) {
+    LaunchedEffect(ponteGemini, fichaLacre, casoAtena, textoRequisicao, avisoRequisicao, protocolo) {
         if (ponteGemini == null) return@LaunchedEffect
         val f = fichaLacre
         val a = casoAtena
@@ -556,9 +568,20 @@ fun CaptureScreen() {
                 if (a.materiais.isNotEmpty()) append(" Materiais do caso: ${a.materiais.joinToString("; ")}.")
                 if (a.exames.isNotEmpty()) append(" Exames complementares: ${a.exames.joinToString("; ")}.")
             }
-            textoRequisicao?.let {
-                append(" CONTEÚDO DO DOCUMENTO PRINCIPAL (requisição anexada no Atena, texto integral extraído do PDF): ")
-                append(it)
+            val req = textoRequisicao
+            if (req != null) {
+                append(" CONTEÚDO DO DOCUMENTO PRINCIPAL (requisição anexada no Atena, texto integral; ")
+                append("quando houver linhas \"===== ARQUIVO n/N \u2014 nome =====\", cada trecho é um ")
+                append("arquivo do pacote — a requisição e seus anexos): ")
+                append(req)
+            } else {
+                // Sem isto a IA só ficava sem o texto e improvisava. Agora ela
+                // sabe que não há requisição e o que dizer ao perito.
+                append(" SEM REQUISIÇÃO NESTA SESSÃO: ${avisoRequisicao ?: "documento do Atena indisponível"}. ")
+                append("Você NÃO tem o que a autoridade pediu. Conduza pelo roteiro e pelos dados de cadastro acima. ")
+                append("Se o perito perguntar o que foi requisitado, diga exatamente que não há requisição legível ")
+                append("anexada a este protocolo e ofereça registrar o que ele ditar. NUNCA invente, resuma nem ")
+                append("suponha o teor da requisição, do histórico do fato ou do boletim de ocorrência.")
             }
             if (f != null) {
                 append(" Lacre lido: ${f.codigo}.")
