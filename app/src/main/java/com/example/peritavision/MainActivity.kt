@@ -507,12 +507,71 @@ fun CaptureScreen() {
     var rtmpUrl by remember { mutableStateOf<String?>(null) }
     var videoLigado by remember { mutableStateOf(false) }
 
+    // ── RECEPTOR LOCAL (05/09/2026): o tablet como destino do vídeo ──────────
+    // Com config.videoNoTablet, os óculos publicam para este tablet na Wi-Fi da
+    // bancada em vez da VPS. O receptor grava os .flv em filesDir/video/<sessão>
+    // e sobe cada segmento ao servidor quando ele fecha (pausa, queda, fim).
+    // Congelado por sessão: trocar em Configurações com a perícia aberta não
+    // pode religar o stream no meio — a tela promete "vale para a próxima".
+    val videoNoTablet = remember(sessaoId) { config.videoNoTablet }
+    val receptor = remember { com.example.peritavision.rtmp.ReceptorDeVideo(context) }
+    var receptorEstado by remember { mutableStateOf(com.example.peritavision.rtmp.ReceptorDeVideo.Estado()) }
+    var segmentosSubindo by remember { mutableIntStateOf(0) }
+    var segmentosSubidos by remember { mutableIntStateOf(0) }
+    var segmentosComFalha by remember { mutableIntStateOf(0) }
+    LaunchedEffect(receptor) {
+        receptor.aoMudar = { e -> receptorEstado = e }
+        receptor.aoSegmentoFechado = { chave, arquivo ->
+            segmentosSubindo += 1
+            escopo.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val inicioMs = arquivo.name.removeSuffix(".flv").toLongOrNull() ?: arquivo.lastModified()
+                var ok = false
+                for (tentativa in 1..3) {
+                    try {
+                        val shaServidor = backend.enviarSegmentoVideo(chave, arquivo, inicioMs)
+                        val shaLocal = com.example.peritavision.domain.Hashing.sha256(arquivo)
+                        if (shaServidor.isNotBlank() && !shaServidor.equals(shaLocal, ignoreCase = true)) {
+                            throw IllegalStateException("hash divergente (local ${shaLocal.take(12)}, servidor ${shaServidor.take(12)})")
+                        }
+                        ok = true; break
+                    } catch (e: Exception) {
+                        android.util.Log.w("PV-Receptor", "segmento ${arquivo.name} tentativa $tentativa: ${e.message}")
+                        kotlinx.coroutines.delay(2_000L * tentativa)
+                    }
+                }
+                if (ok) { arquivo.delete(); segmentosSubidos += 1 } else segmentosComFalha += 1
+                segmentosSubindo -= 1
+            }
+        }
+    }
+    // Liga o receptor quando a sessão abre no modo tablet; desliga quando fecha.
+    LaunchedEffect(sessaoId, videoNoTablet) {
+        if (sessaoId != null && videoNoTablet) {
+            (device as? MentraGlassesDevice)?.perfilVideo =
+                if (config.qualidadeVideoTablet == ConfiguracoesApp.QUALIDADE_1080P30) MentraGlassesDevice.PerfilVideo.TABLET_1080P30
+                else MentraGlassesDevice.PerfilVideo.TABLET_720P30
+            // Socket fora da thread principal (o Android barra bind/close na main).
+            val erro = withContext(Dispatchers.IO) { receptor.ligar() }
+            status = if (erro == null) "Receptor de vídeo do tablet ligado em ${receptor.estado.ip}:${receptor.estado.porta}"
+                     else "Receptor de vídeo: $erro"
+        } else {
+            (device as? MentraGlassesDevice)?.perfilVideo = MentraGlassesDevice.PerfilVideo.SERVIDOR
+            if (sessaoId == null) withContext(Dispatchers.IO) { receptor.desligar() }
+        }
+    }
+    /** URL que vai para os óculos: o tablet (modo teste) ou a VPS (como sempre). */
+    // Lê receptorEstado (snapshot state) de propósito: é ele que faz a
+    // composição recalcular a URL quando o receptor termina de subir.
+    val urlDoStream: String? =
+        if (videoNoTablet) sessaoId?.takeIf { receptorEstado.ligado }?.let { receptor.urlPara(it) } else rtmpUrl
+
     // "Visão dos óculos": o mesmo stream RTMP que os óculos mandam ao backend,
     // devolvido como HTTP-FLV pelo node-media-server. Porta 8100 porque no
     // servidor de produção a 8001 já estava ocupada por outro serviço —
     // RTMP_HTTP_PORT=8100 no Coolify tem que estar igual a esta constante.
     // rtmp://host:1935/pv/ID → http://host:8100/pv/ID.flv
-    val urlVisao = rtmpUrl?.let { r ->
+    // No modo tablet não existe HTTP-FLV: o cartão mostra o que o receptor recebe.
+    val urlVisao = if (videoNoTablet) null else rtmpUrl?.let { r ->
         Regex("^rtmp://([^:/]+)(?::\\d+)?/(.+)$").find(r)?.let { m ->
             "http://${m.groupValues[1]}:8100/${m.groupValues[2]}.flv"
         }
@@ -780,6 +839,23 @@ fun CaptureScreen() {
                     runCatching { device.pararVideo() }
                     videoLigado = false
                     kotlinx.coroutines.delay(1500)
+                }
+                if (videoNoTablet) {
+                    // Os óculos fecham a publicação, o receptor fecha o segmento e
+                    // o upload começa sozinho. Espera isso acabar (teto 3 min) para
+                    // o servidor ter o vídeo quando montar o laudo.
+                    kotlinx.coroutines.delay(2_500)
+                    var esperaVideo = 0
+                    while ((segmentosSubindo > 0 || receptorEstado.publicando) && esperaVideo < 180_000) {
+                        val mb = receptor.segmentosDe(id).sumOf { it.length() } / 1_000_000.0
+                        status = "Subindo o vídeo do tablet para o servidor (${"%.0f".format(mb)} MB restantes)..."
+                        kotlinx.coroutines.delay(500); esperaVideo += 500
+                    }
+                    if (segmentosComFalha > 0 || receptor.segmentosDe(id).isNotEmpty()) {
+                        vozFeedback.falar("Atenção: parte do vídeo ficou no tablet e não subiu. A perícia será finalizada mesmo assim.")
+                        status = "Vídeo: ${receptor.segmentosDe(id).size} segmento(s) ficaram no tablet (${receptor.pasta}/$id)"
+                        kotlinx.coroutines.delay(2_000)
+                    }
                 }
                 status = "Finalizando sessão..."
                 // Última fala ainda no buffer entra na narração antes do laudo.
@@ -1075,8 +1151,8 @@ fun CaptureScreen() {
     // novo e religa o stream — o servidor abre outro segmento .flv e a
     // consolidação junta tudo; o trecho da pausa simplesmente não existe.
     var estavaPausado by remember { mutableStateOf(false) }
-    LaunchedEffect(sessaoId, conectado, rtmpUrl, gravacaoPausada) {
-        val url = rtmpUrl
+    LaunchedEffect(sessaoId, conectado, urlDoStream, gravacaoPausada) {
+        val url = urlDoStream
         val id = sessaoId
         if (id != null && !videoLigado && url != null && !gravacaoPausada &&
             (device !is MentraGlassesDevice || conectado)
@@ -1387,7 +1463,12 @@ fun CaptureScreen() {
     // O que os óculos estão vendo, ao vivo (só no modo MENTRA — no PHONE a
     // pré-visualização da câmera já mora dentro do cartão de captura).
     val cartaoVisao: @Composable () -> Unit = {
-        if (ehMentra) CartaoVisaoOculos(urlFlv = urlVisao, aoVivo = videoLigado, protocolo = protocolo.trim())
+        if (ehMentra) CartaoVisaoOculos(
+            urlFlv = urlVisao, aoVivo = videoLigado, protocolo = protocolo.trim(),
+            receptor = if (videoNoTablet) receptorEstado else null,
+            perfil = (device as? MentraGlassesDevice)?.perfilVideo?.nome ?: "",
+            subindo = segmentosSubindo, subidos = segmentosSubidos, comFalha = segmentosComFalha,
+        )
     }
     // O laudo em preenchimento: acompanha a sessão, seção a seção, com o que
     // já se sabe (ATENA, ficha do lacre, fotos seladas, narração do perito).
@@ -1876,7 +1957,76 @@ private fun CartaoCaptura(
 }
 
 @Composable
-private fun CartaoVisaoOculos(urlFlv: String?, aoVivo: Boolean, protocolo: String) {
+private fun CartaoVisaoOculos(
+    urlFlv: String?,
+    aoVivo: Boolean,
+    protocolo: String,
+    /** Estado do receptor local (modo "tablet"); null no modo servidor. */
+    receptor: com.example.peritavision.rtmp.ReceptorDeVideo.Estado? = null,
+    perfil: String = "",
+    subindo: Int = 0,
+    subidos: Int = 0,
+    comFalha: Int = 0,
+) {
+    if (receptor != null) {
+        // MODO TABLET: sem player (ainda) — o que importa no teste de campo é
+        // saber que os quadros estão chegando, a que taxa e com que tamanho.
+        val recebendo = receptor.publicando && System.currentTimeMillis() - receptor.ultimoQuadroMs < 4_000
+        var segundos by remember(receptor.chave) { mutableIntStateOf(0) }
+        LaunchedEffect(receptor.chave, receptor.publicando) {
+            while (receptor.publicando) { delay(1000); segundos++ }
+        }
+        val cronometro = "%02d:%02d".format(segundos / 60, segundos % 60)
+        val mb = receptor.bytes / 1_000_000.0
+        val legenda = when {
+            !receptor.ligado -> receptor.erro ?: "Receptor do tablet desligado."
+            receptor.erro != null -> receptor.erro
+            receptor.publicando && !recebendo -> "Óculos conectados ao tablet, mas sem quadro há mais de 4 s."
+            receptor.publicando -> "Recebendo direto dos óculos pela Wi-Fi da bancada — sem internet no caminho."
+            else -> "Aguardando os óculos publicarem em rtmp://${receptor.ip}:${receptor.porta}/pv/…"
+        }
+        MolduraVisor(
+            aoVivo = recebendo,
+            cronometro = cronometro,
+            fonte = "TABLET · $perfil",
+            protocolo = if (protocolo.isBlank()) "" else "PROT $protocolo",
+            legenda = legenda,
+            conteudo = {
+                Column(
+                    Modifier.fillMaxSize().padding(16.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = if (receptor.publicando) "%.1f".format(receptor.quadrosPorSegundo) else "—",
+                        style = MaterialTheme.typography.displayMedium,
+                        color = if (recebendo) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("quadros por segundo", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "${receptor.quadros} quadros · %.1f MB · segmento ${receptor.segmentosFechados + if (receptor.publicando) 1 else 0}".format(mb),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    val envio = buildString {
+                        if (subindo > 0) append("subindo $subindo · ")
+                        if (subidos > 0) append("no servidor $subidos · ")
+                        if (comFalha > 0) append("FALHOU $comFalha · ")
+                    }.trimEnd(' ', '·')
+                    if (envio.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(envio, style = MaterialTheme.typography.labelMedium,
+                            color = if (comFalha > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    receptor.ultimoMotivo?.let {
+                        Spacer(Modifier.height(4.dp))
+                        Text("último segmento: $it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
+        )
+        return
+    }
     val transmitindo = aoVivo && urlFlv != null
 
     // Cronômetro da transmissão: zera quando a URL muda (nova sessão).

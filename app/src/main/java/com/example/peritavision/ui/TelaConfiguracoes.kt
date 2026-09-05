@@ -257,6 +257,55 @@ fun TelaConfiguracoes(
                 }
             }
 
+            // ── VÍDEO DOS ÓCULOS (05/09/2026 — teste de campo do receptor local) ──
+            TituloSecao("Vídeo dos óculos", "para onde os óculos transmitem")
+            var destino by remember { mutableStateOf(config.destinoVideo) }
+            var qualidade by remember { mutableStateOf(config.qualidadeVideoTablet) }
+            CartaoPv {
+                CabecalhoCartao(
+                    titulo = "Destino do vídeo",
+                    etiqueta = if (destino == ConfiguracoesApp.DESTINO_TABLET) "tablet (teste)" else "servidor",
+                    tomEtiqueta = if (destino == ConfiguracoesApp.DESTINO_TABLET) Tom.ATENCAO else Tom.NEUTRO,
+                    grande = true,
+                )
+                TextoApoio(
+                    "Hoje os óculos mandam o vídeo pela internet até o servidor, e o tablet puxa de " +
+                        "volta para mostrar. No modo TABLET os óculos publicam para o próprio tablet, na " +
+                        "Wi-Fi da bancada: sem internet no caminho, mais qualidade, e os arquivos sobem ao " +
+                        "servidor quando a perícia termina. Óculos e tablet precisam estar na MESMA rede. " +
+                        "Vale para a próxima sessão.",
+                )
+                Spacer(Modifier.height(10.dp))
+                OpcaoRadio(
+                    marcada = destino == ConfiguracoesApp.DESTINO_SERVIDOR,
+                    titulo = "Servidor (como sempre)",
+                    descricao = "RTMP para a VPS · 540p · 15 fps · 1,2 Mbps — o que a internet da bancada aguenta.",
+                    onClick = { destino = ConfiguracoesApp.DESTINO_SERVIDOR; config.destinoVideo = destino },
+                )
+                OpcaoRadio(
+                    marcada = destino == ConfiguracoesApp.DESTINO_TABLET,
+                    titulo = "Tablet, pela Wi-Fi da bancada (teste)",
+                    descricao = "Os óculos publicam para este tablet. O cartão de visão mostra quadros/s e tamanho; os segmentos .flv sobem ao servidor no Finalizar.",
+                    onClick = { destino = ConfiguracoesApp.DESTINO_TABLET; config.destinoVideo = destino },
+                )
+                if (destino == ConfiguracoesApp.DESTINO_TABLET) {
+                    Spacer(Modifier.height(10.dp))
+                    TextoApoio("Qualidade pedida aos óculos (na rede local dá para pedir mais):")
+                    OpcaoRadio(
+                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_720P30,
+                        titulo = "720p · 30 fps · 3 Mbps",
+                        descricao = "Comece por aqui. ~22 MB por minuto.",
+                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_720P30; config.qualidadeVideoTablet = qualidade },
+                    )
+                    OpcaoRadio(
+                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_1080P30,
+                        titulo = "1080p · 30 fps · 5 Mbps",
+                        descricao = "Se o 720p vier sem falha. ~37 MB por minuto.",
+                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_1080P30; config.qualidadeVideoTablet = qualidade },
+                    )
+                }
+            }
+
             RodapeMarca("Facil Mova")
         }
         Spacer(Modifier.navigationBarsPadding())

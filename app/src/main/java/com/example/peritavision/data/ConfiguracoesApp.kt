@@ -67,6 +67,23 @@ class ConfiguracoesApp(context: Context) {
         get() = prefs.getString(CHAVE_PAL_PAUSA, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_PAL_PAUSA, v.trim()).apply()
 
+    /** PARA ONDE OS ÓCULOS MANDAM O VÍDEO (05/09/2026, teste de campo).
+     *  "servidor": RTMP para a VPS, como sempre foi — o vídeo cruza a internet e
+     *  o tablet puxa de volta para mostrar. "tablet": os óculos publicam para o
+     *  próprio tablet na Wi-Fi da bancada; o tablet grava, mostra e sobe os
+     *  segmentos ao servidor no fim. Sem internet no caminho do vídeo. */
+    var destinoVideo: String
+        get() = prefs.getString(CHAVE_DESTINO_VIDEO, DESTINO_SERVIDOR) ?: DESTINO_SERVIDOR
+        set(v) = prefs.edit().putString(CHAVE_DESTINO_VIDEO, v).apply()
+
+    /** Perfil de captura quando o destino é o tablet. Na LAN dá para pedir mais
+     *  que os 540p/15 fps que a VPS aguentava. */
+    var qualidadeVideoTablet: String
+        get() = prefs.getString(CHAVE_QUALIDADE_TABLET, QUALIDADE_720P30) ?: QUALIDADE_720P30
+        set(v) = prefs.edit().putString(CHAVE_QUALIDADE_TABLET, v).apply()
+
+    val videoNoTablet: Boolean get() = destinoVideo == DESTINO_TABLET
+
     /** Mapa modo → palavra, só com as que o perito preencheu. */
     fun palavrasParaPonte(): Map<String, String> = buildMap {
         palavraConversa.takeIf { it.isNotBlank() }?.let { put("conversa", it) }
@@ -87,6 +104,12 @@ class ConfiguracoesApp(context: Context) {
         private const val CHAVE_PAL_CONVERSA = "assistente.palavra_conversa"
         private const val CHAVE_PAL_SILENCIO = "assistente.palavra_silencio"
         private const val CHAVE_PAL_PAUSA = "assistente.palavra_pausa"
+        private const val CHAVE_DESTINO_VIDEO = "video.destino"
+        private const val CHAVE_QUALIDADE_TABLET = "video.qualidade_tablet"
+        const val DESTINO_SERVIDOR = "servidor"
+        const val DESTINO_TABLET = "tablet"
+        const val QUALIDADE_720P30 = "720p30"
+        const val QUALIDADE_1080P30 = "1080p30"
         val PALAVRAS_PADRAO = mapOf("conversa" to "assistente", "silencio" to "silêncio", "pausa" to "pausa")
     }
 }

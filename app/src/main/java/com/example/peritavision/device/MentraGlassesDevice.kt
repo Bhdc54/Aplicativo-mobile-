@@ -470,6 +470,17 @@ class MentraGlassesDevice(
     // ------------------------------------------------------------------------
     // VIDEO DA SESSAO — os oculos transmitem RTMP direto ao servidor (startStream).
 
+    /** Perfil do stream. O padrão (servidor) é o que a VPS aguentava; para o
+     *  tablet na mesma Wi-Fi dá para pedir mais (05/09/2026). */
+    data class PerfilVideo(val largura: Int, val altura: Int, val bitrate: Int, val fps: Int, val nome: String) {
+        companion object {
+            val SERVIDOR = PerfilVideo(960, 540, 1_200_000, 15, "540p · 15 fps · 1,2 Mbps")
+            val TABLET_720P30 = PerfilVideo(1280, 720, 3_000_000, 30, "720p · 30 fps · 3 Mbps")
+            val TABLET_1080P30 = PerfilVideo(1920, 1080, 5_000_000, 30, "1080p · 30 fps · 5 Mbps")
+        }
+    }
+    var perfilVideo: PerfilVideo = PerfilVideo.SERVIDOR
+
     private var streamAtivo = false
     /** Cresce a cada iniciarVideo. O laço de insistência do pararVideo compara
      *  com a geração que ele capturou: sem isso, a 2ª tentativa de stop (2 s
@@ -508,7 +519,7 @@ class MentraGlassesDevice(
                         // ~6 quadros/s irregulares e o vídeo do laudo saía travado (campo 03/09).
                         // 540p/1,2 Mbps/15 fps é o que os óculos sustentam — mais quadros de
                         // verdade, mesma legibilidade do vestígio.
-                        video = StreamVideoConfig(width = 960, height = 540, bitrate = 1_200_000, fps = 15),
+                        video = StreamVideoConfig(width = perfilVideo.largura, height = perfilVideo.altura, bitrate = perfilVideo.bitrate, fps = perfilVideo.fps),
                     )
                 )
                 _eventos.tryEmit(GlassesEvent.GravacaoIniciada(TipoEvidencia.VIDEO))

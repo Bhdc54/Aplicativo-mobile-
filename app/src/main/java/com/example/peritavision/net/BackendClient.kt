@@ -256,6 +256,26 @@ class BackendClient(var baseUrl: String) {
         return r.optString("laudoId").takeIf { it.isNotBlank() }
     }
 
+    /** SEGMENTO DE VÍDEO gravado no tablet → servidor (destino "tablet", 05/09).
+     *  Sobe o .flv em streaming (tamanho fixo, sem carregar na memória) para o
+     *  mesmo lugar onde o RTMP da VPS gravava; a consolidação do laudo não muda.
+     *  Devolve o SHA-256 que o servidor calculou, para conferir com o local. */
+    suspend fun enviarSegmentoVideo(sessaoId: String, arquivo: java.io.File, inicioMs: Long): String =
+        comReautenticacao {
+            withContext(Dispatchers.IO) {
+                val conn = abrir(URL(baseUrl.trimEnd('/') + "/v1/sessoes/$sessaoId/video/segmentos?inicioMs=$inicioMs"), "POST", leituraMs = 10 * 60_000).apply {
+                    autenticar(this)
+                    setRequestProperty("Content-Type", "video/x-flv")
+                    doOutput = true
+                    setFixedLengthStreamingMode(arquivo.length())
+                }
+                arquivo.inputStream().use { entrada -> conn.outputStream.use { saida -> entrada.copyTo(saida, 256 * 1024) } }
+                val texto = conferir(conn, "POST segmento de vídeo")
+                conn.disconnect()
+                if (texto.isBlank()) "" else JSONObject(texto).optString("sha256")
+            }
+        }
+
     /** Emite o webhook para os óculos fotografarem o LACRE (pré-sessão). */
     suspend fun solicitarLeituraLacre(): CredencialCaptura {
         val r = postJson("/v1/lacre/leituras", JSONObject())
