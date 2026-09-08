@@ -1839,6 +1839,7 @@ fun CaptureScreen() {
             motivoBloqueio = motivoBloqueio,
             fotosEnviadas = fotosEnviadas,
             quadrosMarcados = quadrosMarcados,
+            fotosParadasNoTablet = fotosParadasNoTablet,
             vozAtiva = vozAtiva,
             ouvindoPelosOculos = ouvindoPelosOculos,
             assistenteIa = ponteGemini != null,
@@ -2271,6 +2272,8 @@ private fun CartaoCaptura(
     fotosEnviadas: Int,
     /** Capturas que ficaram só como marca no vídeo — ver quadrosMarcados. */
     quadrosMarcados: Int = 0,
+    /** Fotos completas paradas no tablet, esperando o servidor aceitar. */
+    fotosParadasNoTablet: Int = 0,
     vozAtiva: Boolean,
     ouvindoPelosOculos: Boolean,
     /** true quando o assistente IA está ligado: é ELE quem recebe os pedidos

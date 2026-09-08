@@ -70,9 +70,11 @@ class MentraGlassesDevice(
     data class AutorizacaoCaptura(
         val requestId: String,
         val webhookUrl: String,
-        /** true = o webhook acima é o receptor local do tablet. */
-        val peloTablet: Boolean = false,
         val authToken: String,
+        /** true = o webhook acima é o receptor local do tablet, e não o
+         *  endereço público do backend. Fica por ÚLTIMO e com padrão: os
+         *  chamadores antigos passam os três primeiros por posição. */
+        val peloTablet: Boolean = false,
     )
 
     /** Estado de conexao observavel pela UI (true quando os oculos estao prontos). */
