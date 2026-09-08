@@ -295,6 +295,10 @@ class BackendClient(var baseUrl: String) {
         val bytes: Long,
         /** "quadro_do_video" quando não foi foto: é o quadro recortado do vídeo. */
         val origem: String?,
+        /** requestId da autorização — é o que casa a foto que o tablet já
+         *  mostra na bancada com a mesma foto vinda do servidor, para a
+         *  galeria não exibir a imagem duas vezes. */
+        val requestId: String?,
     )
 
     suspend fun listarFotos(sessaoId: String): List<FotoDaPericia> {
@@ -308,6 +312,7 @@ class BackendClient(var baseUrl: String) {
                 quando = o.optString("capturado_em").takeIf { it.isNotBlank() } ?: o.optString("solicitado_em"),
                 bytes = o.optLong("tamanho_bytes", 0),
                 origem = o.optString("origem").takeIf { it.isNotBlank() && it != "null" },
+                requestId = o.optString("request_id").takeIf { it.isNotBlank() && it != "null" },
             )
         }
     }

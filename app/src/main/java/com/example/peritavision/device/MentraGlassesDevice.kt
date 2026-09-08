@@ -70,6 +70,8 @@ class MentraGlassesDevice(
     data class AutorizacaoCaptura(
         val requestId: String,
         val webhookUrl: String,
+        /** true = o webhook acima é o receptor local do tablet. */
+        val peloTablet: Boolean = false,
         val authToken: String,
     )
 
@@ -257,11 +259,34 @@ class MentraGlassesDevice(
             _eventos.tryEmit(GlassesEvent.Erro("óculos não conseguiram enviar a foto: $erro"))
             return
         }
+        if (req.isNotBlank() && capturasNoTablet.remove(req)) {
+            // Quem confirma é o arquivo chegando no receptor do tablet.
+            _eventos.tryEmit(GlassesEvent.Aviso("óculos terminaram a foto — esperando o arquivo no tablet"))
+            return
+        }
         _eventos.tryEmit(GlassesEvent.CapturaRemota(TipoEvidencia.FOTO, req, uploadUrl = url))
     }
 
     /** Guardado para casar o photo_response quando o evento nao trouxer o id. */
     private var ultimoRequestId: String? = null
+
+    /**
+     * Capturas cujo JPEG foi endereçado ao TABLET (receptor local), e não ao
+     * webhook público.
+     *
+     * Muda quem tem a palavra final sobre a foto. Com o webhook público, o
+     * único sinal era o `photo_response` dos óculos — e ele diz "eu terminei
+     * meu lado", não "o servidor tem a imagem". Em 08/09/2026 esse sinal veio
+     * duas vezes, o app contou duas fotos, e não havia foto nenhuma no
+     * servidor. Quando a foto vai ao tablet, quem confirma é o arquivo
+     * chegando, e aqui o photo_response passa a ser só aviso.
+     *
+     * É um CONJUNTO POR CAPTURA, não uma chave geral: o receptor pode subir ou
+     * cair no meio da perícia, e uma foto endereçada ao tablet segundos antes
+     * não pode ser julgada pela configuração de agora. A leitura de lacre, que
+     * tem webhook próprio, nunca entra aqui.
+     */
+    private val capturasNoTablet = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     // --- leitura tolerante de campos do SDK (nomes variam entre betas) -------
 
@@ -438,6 +463,7 @@ class MentraGlassesDevice(
             // recusarem (câmera ocupada) ou der erro, aí sim cai na marca no
             // vídeo — e a tela diz que é marca, não foto.
             ultimoRequestId = autorizacao.requestId
+            if (autorizacao.peloTablet) capturasNoTablet.add(autorizacao.requestId)
             try {
                 sdk.requestPhoto(
                     PhotoRequest(
@@ -463,18 +489,31 @@ class MentraGlassesDevice(
                     )
                 }
             } catch (e: Exception) {
-                // Câmera ocupada com o stream, ou qualquer outra recusa: cai
-                // para a MARCA no vídeo, dizendo o que é.
                 Log.w(TAG, "requestPhoto falhou (stream ativo? $streamAtivo): ${e.message}")
-                _eventos.tryEmit(
-                    GlassesEvent.CapturaRemota(TipoEvidencia.FOTO, autorizacao.requestId, null, fotoDeVerdade = false)
-                )
-                _eventos.tryEmit(
-                    GlassesEvent.Aviso(
-                        "os óculos não deram a foto (${e.message}) — marquei o quadro no vídeo; " +
-                            "a imagem só entra no laudo se o servidor conseguir recortá-la",
+                if (autorizacao.peloTablet) {
+                    // `requestPhoto` é suspend e só volta quando o UPLOAD acaba:
+                    // um estouro de tempo aqui não quer dizer que a foto não foi
+                    // tirada. Com o receptor no tablet, a resposta certa é
+                    // esperar o arquivo — quem desiste é o relógio do app, que
+                    // marca o quadro no vídeo se nada chegar.
+                    _eventos.tryEmit(
+                        GlassesEvent.Aviso(
+                            "os óculos não confirmaram a foto (${e.message}) — sigo esperando o arquivo no tablet",
+                        )
                     )
-                )
+                } else {
+                    // Câmera ocupada com o stream, ou qualquer outra recusa: cai
+                    // para a MARCA no vídeo, dizendo o que é.
+                    _eventos.tryEmit(
+                        GlassesEvent.CapturaRemota(TipoEvidencia.FOTO, autorizacao.requestId, null, fotoDeVerdade = false)
+                    )
+                    _eventos.tryEmit(
+                        GlassesEvent.Aviso(
+                            "os óculos não deram a foto (${e.message}) — marquei o quadro no vídeo; " +
+                                "a imagem só entra no laudo se o servidor conseguir recortá-la",
+                        )
+                    )
+                }
             }
         }
     }

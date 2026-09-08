@@ -142,8 +142,9 @@ class ReceptorDeVideo(context: Context) {
     }
 
     /** IPv4 do tablet na rede Wi-Fi. Primeiro pelo ConnectivityManager (a rede
-     *  ativa com transporte Wi-Fi); se não der, varre as interfaces wlan. */
-    private fun ipNaWifi(): String? {
+     *  ativa com transporte Wi-Fi); se não der, varre as interfaces wlan.
+     *  Público porque o receptor de FOTOS precisa do mesmo endereço. */
+    fun ipNaWifi(): String? {
         try {
             val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             for (rede in cm.allNetworks) {
