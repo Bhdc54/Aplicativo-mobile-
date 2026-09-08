@@ -94,10 +94,17 @@ class PonteGemini(
      *  e não parava de falar; e o "fotografe" falado por ele disparava o
      *  comando de captura offline. */
     @Volatile private var falandoAteMs = 0L
+    // A janela é esticada pela THREAD DE VOZ, a cada trecho que ela escreve —
+    // não pela chegada. O Gemini entrega dezenas de segundos de áudio em
+    // poucos segundos: prever pela chegada põe a janela no futuro, e se a
+    // reprodução parar (track morto, fila limpa na troca de modo, socket
+    // caído) o microfone nunca reabre — a IA fala a abertura e emudece para
+    // sempre, porque nada do que o perito diz chega ao Gemini. Amarrada à
+    // reprodução, a janela expira sozinha em um trecho (campo 08/09/2026).
     /** Guardados até o "pronto" (e reenviados após reconexão automática). */
     @Volatile private var urlVideo: String? = null
     @Volatile private var contextoCaso: String? = null
-    private var ws: WebSocket? = null
+    @Volatile private var ws: WebSocket? = null
     private val cliente = OkHttpClient()
     private val principal = Handler(Looper.getMainLooper())
 
@@ -144,7 +151,14 @@ class PonteGemini(
         threadVoz = Thread({
             while (!encerrado) {
                 val pcm = filaVoz.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
-                runCatching { tocar(pcm) }.onFailure { Log.w(TAG, "voz: falha ao tocar", it) }
+                // Estica a janela pela duração DESTE trecho, aqui, na hora de
+                // tocar: é o único ponto em que "está falando" é verdade.
+                val duracaoMs = (pcm.size / 2L) * 1000L / 24_000L
+                falandoAteMs = maxOf(falandoAteMs, System.currentTimeMillis()) + duracaoMs
+                runCatching { tocar(pcm) }.onFailure {
+                    Log.w(TAG, "voz: falha ao tocar", it)
+                    falandoAteMs = 0 // não segurar o microfone por áudio que não saiu
+                }
             }
         }, "pv-voz").apply { isDaemon = true; start() }
     }
@@ -229,6 +243,15 @@ class PonteGemini(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (webSocket !== ws) return // socket antigo
                 val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
+                // runCatching em volta de TUDO: estes callbacks rodam na thread
+                // do OkHttp e caem em código de tela (bipe, corrotina, estado).
+                // Uma exceção ali derrubava o WebSocket, que reconectava em 3 s,
+                // e a perícia entrava num vai e vem invisível.
+                runCatching { tratarMensagem(msg) }
+                    .onFailure { Log.w(TAG, "falha ao tratar ${msg.optString("tipo")}", it) }
+            }
+
+            private fun tratarMensagem(msg: JSONObject) {
                 when (msg.optString("tipo")) {
                     "pronto" -> {
                         pronto = true
@@ -250,6 +273,11 @@ class PonteGemini(
                     "triagem" -> onTriagem()
                     "modo" -> {
                         modo = msg.optString("modo", "conversa")
+                        // Silêncio e pausa cortam a fala: o que já estava na
+                        // fila não pode continuar saindo, e a janela do
+                        // half-duplex não pode segurar o microfone por um
+                        // áudio que foi descartado.
+                        if (modo != "conversa") pararFala()
                         onModo(modo, msg.optString("origem"))
                     }
                     "achado" -> msg.optJSONObject("achado")?.let { onAchado(it) }
@@ -268,16 +296,17 @@ class PonteGemini(
                 // thread do OkHttp, não na UI.
                 if (bytes.size > 1 && bytes[0] == 0x03.toByte()) {
                     val pcm = bytes.substring(1).toByteArray()
-                    // Estende a janela de "estou falando" pela duração deste
-                    // trecho (PCM16 mono 24 kHz → bytes/2/24000 segundos),
-                    // com uma cauda de 400 ms para o som acabar de sair.
-                    val duracaoMs = (pcm.size / 2L) * 1000L / 24_000L
                     val agora = System.currentTimeMillis()
-                    // Empilha só a duração real do trecho: a cauda de 400 ms
-                    // é aplicada UMA vez em estaFalando(). Somar 400 ms por
-                    // pacote deixava o microfone mudo por dezenas de segundos
-                    // depois da fala — e as perguntas do perito se perdiam.
-                    falandoAteMs = maxOf(falandoAteMs, agora) + duracaoMs
+                    // Piso curto: fecha o microfone no instante em que o áudio
+                    // chega, antes de a thread escrever o primeiro trecho. Quem
+                    // estica a janela de verdade é a thread de voz.
+                    falandoAteMs = maxOf(falandoAteMs, agora + 300L)
+                    // Fila entupida = reprodução emperrada. Zera tudo: melhor
+                    // perder a fala do que tocar picado e segurar o microfone.
+                    if (filaVoz.size > 400) {
+                        Log.w(TAG, "voz: fila entupida (${filaVoz.size} trechos) — descartando")
+                        filaVoz.clear(); falandoAteMs = 0
+                    }
                     filaVoz.offer(pcm)
                     garantirThreadVoz()
                 }
@@ -356,8 +385,19 @@ class PonteGemini(
         runCatching { ws?.send(JSONObject().put("tipo", "modo").put("modo", novo).toString()) }
     }
 
-    /** true enquanto a voz do assistente ainda está saindo no alto-falante. */
+    /** true enquanto a voz do assistente ainda está saindo no alto-falante.
+     *
+     *  A janela é esticada pela thread de voz conforme ela escreve, com uma
+     *  cauda de 400 ms para o buffer do AudioTrack escoar. */
     fun estaFalando(): Boolean = System.currentTimeMillis() < falandoAteMs + 400L
+
+    /** Corta a fala: esvazia a fila, joga fora o que está no buffer do
+     *  alto-falante e libera o microfone na hora. */
+    fun pararFala() {
+        filaVoz.clear()
+        falandoAteMs = 0
+        runCatching { track?.pause(); track?.flush() }
+    }
 
     /** Cópia do PCM16/16kHz dos óculos. Barato: se a ponte não está pronta, ignora.
      *  HALF-DUPLEX: enquanto o assistente fala, o mic não sobe — ele não se ouve. */
@@ -376,7 +416,7 @@ class PonteGemini(
         pronto = false
         principal.removeCallbacksAndMessages(null)
         runCatching { ws?.close(1000, "encerrado pelo app") }
-        filaVoz.clear()
+        pararFala()
         runCatching { track?.stop(); track?.release() }
     }
 
