@@ -424,18 +424,19 @@ class MentraGlassesDevice(
                 return@launch
             }
 
-            // 2a) Vídeo transmitindo: NAO disputa a câmera (congelava o vídeo).
-            // A captura fica marcada; o servidor recorta o quadro exato do
-            // vídeo no "finalizar" — foto garantida, vídeo intacto.
-            if (streamAtivo) {
-                _eventos.tryEmit(
-                    GlassesEvent.CapturaRemota(TipoEvidencia.FOTO, autorizacao.requestId, null)
-                )
-                _eventos.tryEmit(GlassesEvent.Aviso("foto marcada no vídeo da sessão"))
-                return@launch
-            }
-
-            // 2b) Sem vídeo: os oculos sobem o JPEG direto para o webhook.
+            // FOTO DE VERDADE PRIMEIRO, sempre (08/09/2026). Antes, com o vídeo
+            // transmitindo, o app nem pedia a foto aos óculos: marcava o quadro
+            // e deixava o servidor recortá-lo do vídeo no fim. Duas coisas ruins
+            // saíram disso. O perito ouvia "foto capturada" e via o contador
+            // subir para uma coisa que não era foto; e quando o recorte falhava
+            // — e falhou no teste de campo, porque depende de o vídeo estar
+            // consolidado a tempo — o laudo saía com ZERO imagem, sem ninguém
+            // saber. Um quadro de vídeo 720p também não é foto pericial: a foto
+            // dos óculos é de resolução muito maior.
+            //
+            // Agora tenta a foto de verdade mesmo transmitindo. Se os óculos
+            // recusarem (câmera ocupada) ou der erro, aí sim cai na marca no
+            // vídeo — e a tela diz que é marca, não foto.
             ultimoRequestId = autorizacao.requestId
             try {
                 sdk.requestPhoto(
@@ -462,7 +463,18 @@ class MentraGlassesDevice(
                     )
                 }
             } catch (e: Exception) {
-                _eventos.tryEmit(GlassesEvent.Erro("falha ao capturar foto: ${e.message}"))
+                // Câmera ocupada com o stream, ou qualquer outra recusa: cai
+                // para a MARCA no vídeo, dizendo o que é.
+                Log.w(TAG, "requestPhoto falhou (stream ativo? $streamAtivo): ${e.message}")
+                _eventos.tryEmit(
+                    GlassesEvent.CapturaRemota(TipoEvidencia.FOTO, autorizacao.requestId, null, fotoDeVerdade = false)
+                )
+                _eventos.tryEmit(
+                    GlassesEvent.Aviso(
+                        "os óculos não deram a foto (${e.message}) — marquei o quadro no vídeo; " +
+                            "a imagem só entra no laudo se o servidor conseguir recortá-la",
+                    )
+                )
             }
         }
     }

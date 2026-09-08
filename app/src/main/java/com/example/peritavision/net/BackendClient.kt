@@ -191,6 +191,12 @@ class BackendClient(var baseUrl: String) {
         val retomada: Boolean = false,
         /** fotos já recebidas nessa sessão, para o contador continuar de onde parou. */
         val fotosRecebidas: Int = 0,
+        /** QUEM ficou responsável pela perícia (o servidor resolve pela matrícula). */
+        val peritoNome: String? = null,
+        val peritoMatricula: String? = null,
+        /** Preenchido quando a matrícula digitada NÃO existe: a perícia ficou no
+         *  nome do usuário do tablet, e o perito precisa saber disso. */
+        val matriculaDesconhecida: String? = null,
     )
 
     /** @param matriculaPerito quem está na bancada — separa os laudos por perito. */
@@ -205,6 +211,9 @@ class BackendClient(var baseUrl: String) {
             rtmpUrl = r.optString("rtmpUrl").takeIf { it.isNotBlank() },
             retomada = r.optBoolean("retomada", false),
             fotosRecebidas = r.optInt("fotosRecebidas", 0),
+            peritoNome = r.optString("peritoNome").takeIf { it.isNotBlank() },
+            peritoMatricula = r.optString("peritoMatricula").takeIf { it.isNotBlank() },
+            matriculaDesconhecida = r.optString("matriculaDesconhecida").takeIf { it.isNotBlank() },
         )
     }
 

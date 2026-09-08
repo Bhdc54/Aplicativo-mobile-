@@ -331,6 +331,14 @@ fun CaptureScreen() {
     var laudoId by remember { mutableStateOf<String?>(null) }
     var ocupado by remember { mutableStateOf(false) }
     var fotosEnviadas by remember { mutableIntStateOf(0) }
+    /** Capturas que NÃO viraram foto: os óculos recusaram e ficou só a marca no
+     *  vídeo, para o servidor tentar recortar o quadro no fim. Contado separado
+     *  de propósito — misturar as duas coisas escondeu do perito que o laudo
+     *  ia sair sem imagem (campo 08/09/2026). */
+    var quadrosMarcados by remember { mutableIntStateOf(0) }
+    /** Nome (ou matrícula) de quem o SERVIDOR pôs como responsável pela
+     *  perícia — o que decide em qual lista o laudo aparece no painel. */
+    var peritoDaSessao by remember { mutableStateOf<String?>(null) }
 
     // Declaradas aqui (e não junto dos estados da IA, mais acima) porque usam
     // sessaoId — em Kotlin, função local não enxerga variável declarada abaixo.
@@ -475,6 +483,7 @@ fun CaptureScreen() {
             iaPerguntandoTrilha = false
             iaModo = "conversa"
             gravacaoPausada = false
+            peritoDaSessao = null
             achados = emptyList()
             iaVoz = ""
             telaApagada = false
@@ -769,12 +778,31 @@ fun CaptureScreen() {
                     // reiniciou): a perícia continua nela, com as fotos que já
                     // estavam lá — e vai gerar UM laudo só.
                     fotosEnviadas = aberta.fotosRecebidas
+                    quadrosMarcados = 0
                     falarSeSemIa("Sessão retomada. Pode continuar de onde parou.")
                     status = "Sessão retomada — ${aberta.fotosRecebidas} foto(s) já na perícia; pode continuar"
                 } else {
                     fotosEnviadas = 0
+                    quadrosMarcados = 0
                     falarSeSemIa("Sessão iniciada. Pode capturar.")
                     status = "Sessão aberta — pode capturar"
+                }
+                // DE QUEM É A PERÍCIA. O tablet é compartilhado e entra no
+                // backend com a credencial dele, não com a do perito; quem
+                // separa os laudos é a matrícula digitada. Quando ela não
+                // existe, a perícia ficava no nome do usuário do tablet EM
+                // SILÊNCIO — o perito só descobria não achando o laudo na
+                // lista dele (campo 08/09/2026).
+                peritoDaSessao = aberta.peritoNome ?: aberta.peritoMatricula
+                if (aberta.matriculaDesconhecida != null) {
+                    status = "ATENÇÃO: matrícula ${aberta.matriculaDesconhecida} não existe no sistema — " +
+                        "a perícia ficou no nome de ${peritoDaSessao ?: "quem está logado no tablet"}"
+                    vozFeedback.falar(
+                        "Atenção: a matrícula digitada não existe no sistema. " +
+                            "Esta perícia vai ficar no nome de outro usuário.",
+                    )
+                } else if (peritoDaSessao != null) {
+                    status = "Perícia de $peritoDaSessao — ${if (aberta.retomada) "sessão retomada" else "pode capturar"}"
                 }
             } catch (e: Exception) {
                 status = "Erro no backend: ${e.message}"
@@ -852,6 +880,9 @@ fun CaptureScreen() {
                         kotlinx.coroutines.delay(500); esperaVideo += 500
                     }
                     if (segmentosComFalha > 0 || receptor.segmentosDe(id).isNotEmpty()) {
+                        // Isto não é só o vídeo: as fotos que os óculos não
+                        // deram são recortadas DO VÍDEO no servidor. Segmento
+                        // que não subiu = quadro que não vira imagem no laudo.
                         vozFeedback.falar("Atenção: parte do vídeo ficou no tablet e não subiu. A perícia será finalizada mesmo assim.")
                         status = "Vídeo: ${receptor.segmentosDe(id).size} segmento(s) ficaram no tablet (${receptor.pasta}/$id)"
                         kotlinx.coroutines.delay(2_000)
@@ -983,13 +1014,23 @@ fun CaptureScreen() {
                     // So agora, com a confirmacao real (onPhotoResponse), falamos
                     // "foto capturada" — falar antes disso poderia mentir sobre
                     // uma captura que na verdade falhou.
-                    fotosEnviadas++
-                    status = "Foto $fotosEnviadas enviada ao backend ✓"
-                    // Pede a descrição EM VOZ, pelos óculos (se pareados como
-                    // áudio Bluetooth; senão, pelo celular). A próxima fala do
-                    // perito vira a legenda desta foto — o backend ancora o
-                    // primeiro trecho posterior ao pedido da captura.
-                    falarSeSemIa("Foto capturada. Descreva a evidência.")
+                    if (evento.fotoDeVerdade) {
+                        fotosEnviadas++
+                        status = "Foto $fotosEnviadas enviada ao backend ✓"
+                        // Pede a descrição EM VOZ, pelos óculos (se pareados como
+                        // áudio Bluetooth; senão, pelo celular). A próxima fala do
+                        // perito vira a legenda desta foto — o backend ancora o
+                        // primeiro trecho posterior ao pedido da captura.
+                        falarSeSemIa("Foto capturada. Descreva a evidência.")
+                    } else {
+                        // MARCA no vídeo, não foto. Conta separado e diz a verdade:
+                        // esta imagem só existe se o servidor conseguir recortar o
+                        // quadro no fim (campo 08/09/2026: o perito achou que tinha
+                        // duas fotos e o laudo saiu com zero).
+                        quadrosMarcados++
+                        status = "Quadro $quadrosMarcados MARCADO no vídeo — não é foto; o servidor tenta recortar no fim"
+                        falarSeSemIa("Não consegui a foto. Marquei o quadro no vídeo. Descreva a evidência.")
+                    }
                 }
                 is GlassesEvent.ArquivoCapturado -> {
                     // Modo PHONE: o arquivo esta no celular. Sela localmente e,
@@ -1445,6 +1486,7 @@ fun CaptureScreen() {
             podeCapturar = podeCapturar,
             motivoBloqueio = motivoBloqueio,
             fotosEnviadas = fotosEnviadas,
+            quadrosMarcados = quadrosMarcados,
             vozAtiva = vozAtiva,
             ouvindoPelosOculos = ouvindoPelosOculos,
             assistenteIa = ponteGemini != null,
@@ -1532,7 +1574,11 @@ fun CaptureScreen() {
         ) {
             BarraDeTopo(
                 titulo = "PeritaVision",
-                subtitulo = if (temSessao) "Protocolo ${protocolo.trim()} · sessão aberta" else SLOGAN_APP,
+                // O nome do responsável na barra de topo: o perito confere de
+                // relance que a perícia é dele antes de começar a trabalhar.
+                subtitulo = if (temSessao) {
+                    "Protocolo ${protocolo.trim()} · ${peritoDaSessao ?: "sessão aberta"}"
+                } else SLOGAN_APP,
                 logo = R.drawable.logo_politec,
                 onConfiguracoes = { mostrarConfiguracoes = true },
             )
@@ -1856,6 +1902,8 @@ private fun CartaoCaptura(
     podeCapturar: Boolean,
     motivoBloqueio: String?,
     fotosEnviadas: Int,
+    /** Capturas que ficaram só como marca no vídeo — ver quadrosMarcados. */
+    quadrosMarcados: Int = 0,
     vozAtiva: Boolean,
     ouvindoPelosOculos: Boolean,
     /** true quando o assistente IA está ligado: é ELE quem recebe os pedidos
@@ -1879,8 +1927,17 @@ private fun CartaoCaptura(
         )
         if (motivoBloqueio != null) {
             TextoApoio(motivoBloqueio)
-        } else if (fotosEnviadas > 0) {
-            Contador(fotosEnviadas, "fotos enviadas\ne seladas por hash")
+        } else if (fotosEnviadas > 0 || quadrosMarcados > 0) {
+            if (fotosEnviadas > 0) Contador(fotosEnviadas, "fotos enviadas\ne seladas por hash")
+            if (quadrosMarcados > 0) {
+                if (fotosEnviadas > 0) Spacer(Modifier.height(8.dp))
+                TextoApoio(
+                    "$quadrosMarcados captura(s) NÃO viraram foto: os óculos recusaram e ficou só a " +
+                        "marca no vídeo. O servidor tenta recortar o quadro ao finalizar — se não " +
+                        "conseguir, essas imagens não entram no laudo. Confira no painel antes de assinar.",
+                    Tom.ATENCAO,
+                )
+            }
         } else {
             TextoApoio(
                 if (assistenteIa) {

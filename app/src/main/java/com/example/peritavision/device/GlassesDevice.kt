@@ -48,6 +48,12 @@ sealed interface GlassesEvent {
         val tipo: TipoEvidencia,
         val requestId: String,
         val uploadUrl: String?,
+        /** false = não é foto: é uma MARCA no vídeo, e o quadro só vira imagem
+         *  se o servidor conseguir recortá-lo no fim. A tela e a voz têm que
+         *  dizer isso ao perito — dizer "foto capturada" para uma marca fez o
+         *  perito sair da bancada achando que tinha duas fotos e o laudo sair
+         *  com zero (campo 08/09/2026). */
+        val fotoDeVerdade: Boolean = true,
     ) : GlassesEvent
 
     /** Uma gravacao (video/audio) comecou. */
