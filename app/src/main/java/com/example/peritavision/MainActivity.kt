@@ -26,6 +26,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -44,6 +46,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import com.example.peritavision.scan.LeitorCodigo
 import androidx.compose.ui.text.style.TextOverflow
@@ -339,6 +344,25 @@ fun CaptureScreen() {
     /** Nome (ou matrícula) de quem o SERVIDOR pôs como responsável pela
      *  perícia — o que decide em qual lista o laudo aparece no painel. */
     var peritoDaSessao by remember { mutableStateOf<String?>(null) }
+    /** FOTOS JÁ RECEBIDAS pelo servidor, com a miniatura baixada — o perito
+     *  confere na bancada se a foto saiu boa (foco, luz, enquadramento) antes
+     *  de sair da mesa. Pedido de campo 08/09/2026: "às vezes as fotos ficaram
+     *  ruins, aí precisamos ver como ficou". O JPEG nunca passa pelo app na
+     *  captura (os óculos sobem direto ao servidor), então vem de volta daqui. */
+    var fotosDaPericia by remember { mutableStateOf<List<FotoNaTela>>(emptyList()) }
+    var fotoAmpliada by remember { mutableStateOf<FotoNaTela?>(null) }
+    /** A mesma foto em resolução alta, baixada quando o perito amplia. A
+     *  miniatura de 480 px esticada na tela do tablet é upscale de 3x: dá para
+     *  ver enquadramento, mas NÃO dá para julgar foco — que é justamente por
+     *  que o perito abre a foto. */
+    var bitmapAmpliado by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(fotoAmpliada?.id) {
+        bitmapAmpliado = null
+        val f = fotoAmpliada ?: return@LaunchedEffect
+        bitmapAmpliado = withContext(Dispatchers.IO) {
+            runCatching { miniaturaDe(backend.baixarFoto(f.id), alvoPx = 1600) }.getOrNull()
+        }
+    }
 
     // Declaradas aqui (e não junto dos estados da IA, mais acima) porque usam
     // sessaoId — em Kotlin, função local não enxerga variável declarada abaixo.
@@ -947,6 +971,48 @@ fun CaptureScreen() {
         }
     }
 
+    // GALERIA DA BANCADA. Recarrega quando o contador de fotos muda (captura
+    // nova ou quadro recuperado) e insiste por cerca de três minutos — a foto
+    // dos óculos leva alguns segundos para subir pela Wi-Fi deles, e sem
+    // insistir a miniatura da última foto não aparecia. Cada captura nova
+    // relança o efeito, então na prática a galeria acompanha a perícia toda.
+    LaunchedEffect(sessaoId, fotosEnviadas, quadrosMarcados) {
+        val id = sessaoId
+        if (id == null) { fotosDaPericia = emptyList(); return@LaunchedEffect }
+        var tentativas = 0
+        while (tentativas < 12) {
+            val lista = runCatching { backend.listarFotos(id) }.getOrNull()
+            if (lista != null) {
+                // Uma por vez, publicando na tela conforme chega: com dez fotos e
+                // rede ruim, baixar o lote inteiro antes de mostrar deixava a
+                // bancada em branco por minutos.
+                for (meta in lista) {
+                    // takeIf: quem falhou o download fica com miniatura nula e é
+                    // TENTADA DE NOVO. Sem isso a foto ficava "…" para sempre.
+                    val existente = fotosDaPericia.firstOrNull { it.id == meta.id }?.takeIf { it.miniatura != null }
+                    if (existente != null) continue
+                    val bmp = withContext(Dispatchers.IO) {
+                        runCatching { miniaturaDe(backend.baixarFoto(meta.id)) }.getOrNull()
+                    }
+                    val nova = FotoNaTela(
+                        id = meta.id,
+                        miniatura = bmp,
+                        doVideo = meta.origem == "quadro_do_video",
+                        kb = (meta.bytes / 1024).toInt(),
+                    )
+                    fotosDaPericia = (fotosDaPericia.filterNot { it.id == meta.id } + nova)
+                        .sortedBy { f -> lista.indexOfFirst { it.id == f.id }.takeIf { it >= 0 } ?: 999 }
+                }
+                // Chegou tudo o que o app contou como FOTO (quadro marcado só
+                // vira imagem depois, no servidor) e nada ficou em branco.
+                val fotosReais = fotosDaPericia.count { !it.doVideo }
+                if (fotosReais >= fotosEnviadas && fotosDaPericia.all { it.miniatura != null }) break
+            }
+            tentativas += 1
+            kotlinx.coroutines.delay(if (tentativas < 4) 3_000 else 20_000)
+        }
+    }
+
     // Injeta no Mentra COMO pedir autorizacao de captura ao backend. Sem isso,
     // falar "capturar" nao faz nada (era exatamente o sintoma anterior).
     LaunchedEffect(device) {
@@ -1512,6 +1578,17 @@ fun CaptureScreen() {
             subindo = segmentosSubindo, subidos = segmentosSubidos, comFalha = segmentosComFalha,
         )
     }
+    // FOTOS DA PERÍCIA, embaixo do vídeo: miniaturas do que o servidor já tem.
+    val cartaoFotos: @Composable () -> Unit = {
+        if (temSessao) CartaoFotosDaPericia(
+            fotos = fotosDaPericia,
+            // Só o que o app contou como FOTO: quadro marcado não está "subindo",
+            // ele só existe se o servidor recortar no fim — senão o placeholder
+            // ficaria na tela para sempre.
+            esperando = fotosEnviadas - fotosDaPericia.count { !it.doVideo },
+            onAmpliar = { fotoAmpliada = it },
+        )
+    }
     // O laudo em preenchimento: acompanha a sessão, seção a seção, com o que
     // já se sabe (ATENA, ficha do lacre, fotos seladas, narração do perito).
     val cartaoLaudo: @Composable () -> Unit = {
@@ -1607,6 +1684,7 @@ fun CaptureScreen() {
                 cartaoEvidencia()
             } else {
                 cartaoVisao()
+                cartaoFotos()
                 cartaoCaptura()
                 cartaoLaudo()
                 cartaoAssistente()
@@ -1626,6 +1704,9 @@ fun CaptureScreen() {
     }
     // Configurações POR CIMA da bancada (ver comentário do Box): a sessão, os
     // efeitos e o assistente continuam vivos enquanto o perito mexe aqui.
+    fotoAmpliada?.let { f ->
+        FotoAmpliada(f, emAlta = bitmapAmpliado) { fotoAmpliada = null }
+    }
     if (telaApagada) {
         Box(
             Modifier
@@ -2010,6 +2091,170 @@ private fun CartaoCaptura(
                 onClick = onFinalizar,
             )
         }
+    }
+}
+
+/** Uma foto da perícia como a tela precisa dela: id, miniatura e de onde veio. */
+private data class FotoNaTela(
+    val id: String,
+    val miniatura: android.graphics.Bitmap?,
+    /** true = não é foto dos óculos, é quadro recortado do vídeo (720p). */
+    val doVideo: Boolean,
+    val kb: Int,
+)
+
+/** Decodifica o JPEG já REDUZIDO. Sem isto, meia dúzia de fotos de 3 MB em
+ *  resolução cheia derrubaria o app por memória no meio da perícia. */
+private fun miniaturaDe(bytes: ByteArray, alvoPx: Int = 480): android.graphics.Bitmap? {
+    val medir = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, medir)
+    var escala = 1
+    val maior = maxOf(medir.outWidth, medir.outHeight)
+    // maior <= 0 = decode de medição falhou; alvoPx <= 0 nunca acontece, mas o
+    // laço não pode depender disso para terminar.
+    if (maior > 0 && alvoPx > 0) while (maior / (escala * 2) >= alvoPx) escala *= 2
+    val opcoes = android.graphics.BitmapFactory.Options().apply {
+        inSampleSize = escala
+        // JPEG não tem canal alfa: RGB_565 gasta metade da memória de ARGB_8888.
+        // Numa perícia com 40 capturas isso é a diferença entre 20 MB e 45 MB
+        // de bitmaps vivos ao lado do receptor de vídeo.
+        inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+    }
+    return runCatching { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opcoes) }.getOrNull()
+}
+
+/**
+ * FOTOS DA PERÍCIA — miniaturas do que o SERVIDOR já recebeu, embaixo do vídeo.
+ *
+ * Pedido de campo (08/09/2026): a foto sai dos óculos direto para o servidor e
+ * o perito nunca a via na bancada. Quando saía escura, tremida ou fora de
+ * enquadramento, ele só descobria no painel, horas depois, com o vestígio já
+ * lacrado de volta. Aqui ele vê e refaz na hora.
+ */
+@Composable
+private fun CartaoFotosDaPericia(
+    fotos: List<FotoNaTela>,
+    /** Quantas o app contou e ainda não voltaram do servidor. */
+    esperando: Int,
+    onAmpliar: (FotoNaTela) -> Unit,
+) {
+    if (fotos.isEmpty() && esperando <= 0) return
+    CartaoPv {
+        CabecalhoCartao(
+            titulo = "Fotos da perícia",
+            etiqueta = if (fotos.isEmpty()) "subindo…" else "${fotos.size} no servidor",
+            tomEtiqueta = if (fotos.isEmpty()) Tom.ATENCAO else Tom.OK,
+            grande = true,
+        )
+        TextoApoio("Confira agora se saiu boa — foco, luz e enquadramento. Toque para ampliar.")
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            fotos.forEachIndexed { i, f ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 132.dp, height = 100.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(Color(0xFF0E141C))
+                            .clickable { onAmpliar(f) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val bmp = f.miniatura
+                        if (bmp != null) {
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = "foto ${i + 1}",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop,
+                            )
+                        } else {
+                            Text("…", color = Color.White, style = MaterialTheme.typography.titleLarge)
+                        }
+                        if (f.doVideo) {
+                            Text(
+                                "DO VÍDEO",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .background(MaterialTheme.colorScheme.error)
+                                    .padding(horizontal = 4.dp),
+                            )
+                        }
+                    }
+                    Text(
+                        "${i + 1}${if (f.kb > 0) " · ${f.kb} kB" else ""}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (esperando > 0) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 132.dp, height = 100.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(Color(0xFF1A2430)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "subindo\n$esperando",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                    )
+                }
+            }
+        }
+        if (fotos.any { it.doVideo }) {
+            Spacer(Modifier.height(8.dp))
+            TextoApoio(
+                "As marcadas DO VÍDEO não são foto dos óculos: são quadros recortados da " +
+                    "gravação, em resolução menor. Se alguma for importante, refaça a foto.",
+                Tom.ATENCAO,
+            )
+        }
+    }
+}
+
+/** A foto em tela cheia, para julgar foco e luz de verdade. Toque fecha. */
+@Composable
+private fun FotoAmpliada(
+    foto: FotoNaTela,
+    /** Resolução alta, quando já baixou; até lá mostra a miniatura. */
+    emAlta: android.graphics.Bitmap?,
+    onFechar: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xEE000000))
+            .clickable(onClick = onFechar),
+        contentAlignment = Alignment.Center,
+    ) {
+        val bmp = emAlta ?: foto.miniatura
+        if (bmp != null) {
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = "foto ampliada",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+        }
+        Text(
+            when {
+                emAlta == null -> "carregando em resolução cheia…"
+                foto.doVideo -> "quadro do vídeo · toque para fechar"
+                else -> "toque para fechar"
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp),
+        )
     }
 }
 

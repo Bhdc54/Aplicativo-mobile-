@@ -285,6 +285,55 @@ class BackendClient(var baseUrl: String) {
             }
         }
 
+    /** FOTOS JÁ RECEBIDAS na sessão — a galeria da bancada (08/09/2026).
+     *  O JPEG nunca passa pelo app: os óculos sobem direto ao servidor. Para o
+     *  perito conferir se a foto saiu boa ANTES de sair da mesa, o app busca a
+     *  lista aqui e baixa cada imagem em miniatura. */
+    data class FotoDaPericia(
+        val id: String,
+        val quando: String,
+        val bytes: Long,
+        /** "quadro_do_video" quando não foi foto: é o quadro recortado do vídeo. */
+        val origem: String?,
+    )
+
+    suspend fun listarFotos(sessaoId: String): List<FotoDaPericia> {
+        val a = getArray("/v1/capturas?sessaoId=$sessaoId")
+        return (0 until a.length()).mapNotNull { i ->
+            val o = a.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            if (!o.optString("mime_type", "image/jpeg").startsWith("image")) return@mapNotNull null
+            FotoDaPericia(
+                id = id,
+                quando = o.optString("capturado_em").takeIf { it.isNotBlank() } ?: o.optString("solicitado_em"),
+                bytes = o.optLong("tamanho_bytes", 0),
+                origem = o.optString("origem").takeIf { it.isNotBlank() && it != "null" },
+            )
+        }
+    }
+
+    /** O JPEG de uma captura. Baixado uma vez e decodificado reduzido no app. */
+    suspend fun baixarFoto(capturaId: String): ByteArray = comReautenticacao {
+        withContext(Dispatchers.IO) {
+            val conn = abrir(URL(baseUrl.trimEnd('/') + "/v1/capturas/$capturaId/arquivo"), "GET", leituraMs = 30_000)
+                .apply {
+                    autenticar(this)
+                    // `abrir` fixa Accept: application/json, e aqui vem JPEG. Sem
+                    // corrigir, um proxy que respeite content negotiation devolve 406.
+                    setRequestProperty("Accept", "image/*")
+                }
+            val codigo = conn.responseCode
+            if (codigo >= 400) {
+                val erro = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull()
+                conn.disconnect()
+                throw BackendException("foto $capturaId: HTTP $codigo ${erro ?: ""}".trim(), codigo)
+            }
+            val bytes = conn.inputStream.use { it.readBytes() }
+            conn.disconnect()
+            bytes
+        }
+    }
+
     /** Emite o webhook para os óculos fotografarem o LACRE (pré-sessão). */
     suspend fun solicitarLeituraLacre(): CredencialCaptura {
         val r = postJson("/v1/lacre/leituras", JSONObject())
