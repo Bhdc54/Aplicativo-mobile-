@@ -21,8 +21,8 @@
 // gravar "o que deu" e responder 201.
 package com.example.peritavision.net
 
-import android.content.Context
 import android.util.Log
+import com.example.peritavision.custodia.CustodiaDeFotos
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -34,7 +34,11 @@ import java.net.Socket
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-class ReceptorDeFotos(context: Context) {
+class ReceptorDeFotos(
+    /** Quem guarda o arquivo, o estado e a decisão. Este receptor virou o que
+     *  ele deveria ter sido desde o começo: só o HTTP. */
+    private val custodia: CustodiaDeFotos,
+) {
 
     /** Uma foto que chegou INTEIRA dos óculos. */
     data class Recebida(
@@ -44,9 +48,6 @@ class ReceptorDeFotos(context: Context) {
         val bytes: Int,
         val mime: String,
     )
-
-    /** Onde os JPEG ficam até o backend confirmar o recebimento. */
-    val pasta: File = File(context.applicationContext.filesDir, "fotos")
 
     /**
      * O que a tela precisa saber para diagnosticar sem logcat.
@@ -113,7 +114,7 @@ class ReceptorDeFotos(context: Context) {
      */
     fun ligar(ip: String, porta: Int = PORTA_PADRAO): String? {
         if (servidor != null) return null
-        pasta.mkdirs()
+        custodia.pasta.mkdirs()
         var ultimo: String? = null
         for (p in porta until porta + 5) {
             try {
@@ -124,7 +125,7 @@ class ReceptorDeFotos(context: Context) {
                 portaEmUso = s.localPort
                 this.ip = ip
                 equipe = Executors.newFixedThreadPool(ATENDENTES)
-                runCatching { faxina() }
+                runCatching { custodia.faxina() }
                 laco = Thread({ aceitar(s) }, "PV-Fotos").apply { isDaemon = true; start() }
                 mudar { Estado(ligado = true, ip = ip, porta = s.localPort) }
                 Log.i(TAG, "receptor de fotos em http://$ip:$portaEmUso/foto/<requestId>")
@@ -155,41 +156,6 @@ class ReceptorDeFotos(context: Context) {
         if (servidor == null) return null
         return "http://$endereco:$portaEmUso/foto/$requestId"
     }
-
-    /**
-     * Fotos gravadas no tablet que o backend ainda não confirmou.
-     *
-     * Só arquivos de imagem COMPLETOS. O `.parcial` (escrito antes do rename)
-     * fica de fora de propósito: disco cheio ou processo morto no meio da
-     * gravação deixa um desses para trás, e repassá-lo selaria um JPEG
-     * truncado na cadeia de custódia — o oposto do que esta classe promete.
-     */
-    fun pendentes(): List<File> =
-        pasta.listFiles { f ->
-            f.isFile && (f.name.endsWith(".jpg") || f.name.endsWith(".png"))
-        }?.sortedBy { it.name } ?: emptyList()
-
-    /** Onde fica a credencial de repasse desta captura (json), ao lado do JPEG.
-     *  Em memória ela morria com o processo e a foto ficava órfã para sempre. */
-    fun arquivoDeCredencial(requestId: String): File = File(pasta, "$requestId.cred")
-
-    /** Apaga o que já subiu há mais de [dias] e os .parcial abandonados. */
-    fun faxina(dias: Int = 7) {
-        val limite = System.currentTimeMillis() - dias * 24L * 3600_000L
-        pasta.listFiles()?.forEach { f ->
-            val velho = f.lastModified() < limite
-            if (f.name.endsWith(SUFIXO_ENVIADA) && velho) f.delete()
-            if (f.name.endsWith(".parcial") && f.lastModified() < System.currentTimeMillis() - 3600_000L) f.delete()
-        }
-    }
-
-    /** Marca a foto como já aceita pelo backend (some das pendentes). */
-    fun marcarEnviada(arquivo: File): Boolean =
-        arquivo.renameTo(File(arquivo.parentFile, arquivo.name + SUFIXO_ENVIADA))
-
-    /** requestId a partir do nome do arquivo pendente. */
-    fun requestIdDoArquivo(arquivo: File): String =
-        arquivo.name.removeSuffix(SUFIXO_ENVIADA).substringBeforeLast('.')
 
     // ------------------------------------------------------------------------
     // Servidor HTTP mínimo (só o que os óculos usam: um POST com um arquivo)
@@ -297,19 +263,15 @@ class ReceptorDeFotos(context: Context) {
                 return
             }
             val (bytes, mime) = achado
-            val extensao = if (mime.contains("png")) "png" else "jpg"
-            val arquivo = File(pasta, "$requestId.$extensao")
             // Não sobrescreve: a primeira foto selada para esta captura é a que
             // vale. Um segundo envio para o mesmo requestId é recusado.
-            if (arquivo.exists() || File(pasta, arquivo.name + SUFIXO_ENVIADA).exists()) {
+            if (custodia.jaTemFoto(requestId)) {
                 Log.w(TAG, "envio duplicado para $requestId — recusado")
                 responder(cliente, 409, "esta captura ja tem foto")
                 return
             }
-            val temporario = File(pasta, "$requestId.parcial")
-            temporario.outputStream().use { it.write(bytes) }
-            if (!temporario.renameTo(arquivo)) {
-                temporario.delete()
+            val arquivo = custodia.gravarFoto(requestId, bytes, mime)
+            if (arquivo == null) {
                 responder(cliente, 500, "falha ao gravar")
                 return
             }
@@ -510,8 +472,6 @@ class ReceptorDeFotos(context: Context) {
         const val TAG = "PV-Fotos"
         /** Fora das portas conhecidas e longe da 1935 do RTMP. */
         const val PORTA_PADRAO = 8099
-        /** Sufixo do arquivo que o backend já confirmou. */
-        const val SUFIXO_ENVIADA = ".enviada"
         /** Uma foto MEDIUM dos óculos tem 1–3 MB; 12 MB é folga com sobra, e
          *  mantém o heap do tablet longe do limite enquanto grava vídeo. */
         private const val LIMITE_BYTES = 12 * 1024 * 1024

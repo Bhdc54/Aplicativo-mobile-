@@ -562,25 +562,17 @@ fun CaptureScreen() {
     var decodificadorEstado by remember {
         mutableStateOf(com.example.peritavision.rtmp.DecodificadorDeVideo.Estado())
     }
-    val receptorFotos = remember { com.example.peritavision.net.ReceptorDeFotos(context) }
-    /** Autorizações em voo, por requestId: o tablet precisa do token de uso
-     *  único para repassar o JPEG ao backend. */
-    val credenciaisDeCaptura = remember {
-        java.util.concurrent.ConcurrentHashMap<String, com.example.peritavision.net.BackendClient.CredencialCaptura>()
+    /** ARQUIVO, ESTADO E DECISÃO das fotos do tablet — tudo o que antes eram
+     *  sete variáveis e três funções soltas aqui dentro. Ela é stdlib puro e
+     *  tem teste (_to_delete/teste/CustodiaDeFotosTeste.kt); esta tela só
+     *  orquestra a rede, que é a parte que precisa de corrotina. */
+    val custodia = remember {
+        com.example.peritavision.custodia.CustodiaDeFotos(java.io.File(context.filesDir, "fotos"))
     }
-    /** Fotos já no tablet, esperando o servidor aceitar. */
-    var fotosAguardandoRede by remember { mutableIntStateOf(0) }
-    /** Capturas que o relógio já contou como MARCA no vídeo. Se a foto chegar
-     *  depois — e chega, quando a Wi-Fi engasga —, a marca é desfeita. */
-    val marcadosSemFoto = remember { java.util.concurrent.ConcurrentHashMap.newKeySet<String>() }
-    /** Um repasse por captura de cada vez: o `aoReceber` e a varredura de
-     *  pendentes podem olhar o mesmo arquivo ao mesmo tempo. */
-    val enviosEmCurso = remember { java.util.concurrent.ConcurrentHashMap.newKeySet<String>() }
-
-    /** Fotos completas paradas no tablet, esperando o servidor. Contado a
-     *  partir da PASTA, não de um contador na memória: o perito precisa saber
-     *  que sobrou foto mesmo depois de o app ser reaberto. */
-    var fotosParadasNoTablet by remember { mutableIntStateOf(0) }
+    val receptorFotos = remember { com.example.peritavision.net.ReceptorDeFotos(custodia) }
+    var resumoFotos by remember {
+        mutableStateOf(com.example.peritavision.custodia.CustodiaDeFotos.Resumo())
+    }
     /** Matrícula digitada que o servidor não reconheceu: a perícia ficou no
      *  nome de outro perito, e isso tem de ser DITO na abertura. */
     var matriculaNaoCadastrada by remember { mutableStateOf<String?>(null) }
@@ -589,93 +581,50 @@ fun CaptureScreen() {
     var receptorFotosEstado by remember {
         mutableStateOf(com.example.peritavision.net.ReceptorDeFotos.Estado())
     }
-    /** Os óculos não chegaram NEM na porta do tablet: as próximas fotos voltam
-     *  a ser endereçadas ao webhook público, que é o caminho que já funcionava.
-     *  Uma tentativa sem NENHUMA conexão TCP é prova suficiente — insistir só
-     *  perderia mais fotos. */
-    var tabletNaoRecebeFoto by remember { mutableStateOf(false) }
-
-    /** Grava a credencial ao lado do JPEG. Em memória ela morria com o
-     *  processo e a foto ficava órfã, sem ninguém que pudesse repassá-la. */
-    fun guardarCredencial(sessao: String, c: BackendClient.CredencialCaptura) {
-        credenciaisDeCaptura[c.requestId] = c
-        runCatching {
-            receptorFotos.pasta.mkdirs()
-            receptorFotos.arquivoDeCredencial(c.requestId).writeText(
-                org.json.JSONObject()
-                    .put("sessaoId", sessao)
-                    .put("requestId", c.requestId)
-                    .put("webhookUrl", c.webhookUrl)
-                    .put("authToken", c.authToken)
-                    .toString()
-            )
-        }
-    }
-
-    /** Credencial de uma captura: da memória, senão do arquivo ao lado do JPEG.
-     *  `daSessao` garante que a foto da perícia anterior não seja contada
-     *  como foto desta. */
-    fun credencialDe(requestId: String, daSessao: String?): BackendClient.CredencialCaptura? {
-        credenciaisDeCaptura[requestId]?.let { return it }
-        val arquivo = receptorFotos.arquivoDeCredencial(requestId)
-        if (!arquivo.exists()) return null
-        return runCatching {
-            val j = org.json.JSONObject(arquivo.readText())
-            if (daSessao != null && j.optString("sessaoId") != daSessao) return null
-            BackendClient.CredencialCaptura(
-                j.optString("requestId"), j.optString("webhookUrl"), j.optString("authToken"),
-            )
-        }.getOrNull()
-    }
-
     /**
-     * Repassa ao backend uma foto que já está no tablet, insistindo. Devolve
-     * true quando o servidor aceitou (e só então o arquivo sai de pendentes).
+     * Sobe ao backend uma foto que já está no tablet, insistindo. Devolve true
+     * quando o SERVIDOR aceitou — só isso conta como foto no laudo.
+     *
+     * Aqui ficou só o que precisa de corrotina e de rede. Quem sabe onde está
+     * o arquivo, qual é a credencial, quantas faltam e se o caminho do tablet
+     * ainda serve é a custódia, que é testável fora do aparelho.
      */
     suspend fun repassarFoto(requestId: String, arquivo: java.io.File, daSessao: String?, tentativas: Int): Boolean {
-        val cred = credencialDe(requestId, daSessao) ?: return false
-        if (!enviosEmCurso.add(requestId)) return false
-        try {
-            for (t in 1..tentativas) {
-                try {
-                    withContext(Dispatchers.IO) { backend.enviarFoto(cred, arquivo) }
-                    withContext(Dispatchers.IO) {
-                        if (!receptorFotos.marcarEnviada(arquivo)) {
-                            android.util.Log.w("PV-Fotos", "não consegui marcar ${arquivo.name} como enviada")
-                        }
-                        receptorFotos.arquivoDeCredencial(requestId).delete()
+        val cred = custodia.credencial(requestId, daSessao) ?: return false
+        if (!custodia.tomarParaEnvio(requestId)) return false
+        val credencialDoBackend = BackendClient.CredencialCaptura(cred.requestId, cred.webhookUrl, cred.authToken)
+        for (t in 1..tentativas) {
+            try {
+                withContext(Dispatchers.IO) { backend.enviarFoto(credencialDoBackend, arquivo) }
+                withContext(Dispatchers.IO) {
+                    if (!custodia.confirmarEnvio(requestId, arquivo)) {
+                        android.util.Log.w("PV-Fotos", "foto no servidor, mas não consegui marcar ${arquivo.name}")
                     }
-                    credenciaisDeCaptura.remove(requestId)
-                    return true
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    // Cancelamento NÃO é falha de rede: se engolido aqui, o
-                    // arquivo ficava pendente com o servidor já tendo a
-                    // imagem, e a sessão seguinte a subia de novo.
-                    throw e
-                } catch (e: Exception) {
-                    val codigo = (e as? com.example.peritavision.net.BackendException)?.codigo ?: 0
-                    // Token de USO ÚNICO: 401/403/409/410 depois de uma
-                    // tentativa que talvez tenha chegado significa que o
-                    // servidor JÁ tem esta foto. Insistir era prometer
-                    // "tento de novo" para sempre, com a foto já no laudo.
-                    if (t > 1 && codigo in listOf(401, 403, 409, 410)) {
-                        android.util.Log.i("PV-Fotos", "repasse de $requestId: token queimado ($codigo) — foto já estava no servidor")
-                        withContext(Dispatchers.IO) {
-                            receptorFotos.marcarEnviada(arquivo)
-                            receptorFotos.arquivoDeCredencial(requestId).delete()
-                        }
-                        credenciaisDeCaptura.remove(requestId)
-                        return true
-                    }
-                    android.util.Log.w("PV-Fotos", "repasse de $requestId, tentativa $t: ${e.message}")
-                    if (t < tentativas) kotlinx.coroutines.delay(3_000L * t)
                 }
+                return true
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancelamento NÃO é falha de rede: engolir aqui deixava o
+                // arquivo pendente com o servidor já tendo a imagem, e a
+                // sessão seguinte o subia de novo.
+                custodia.devolver(requestId)
+                throw e
+            } catch (e: Exception) {
+                val codigo = (e as? com.example.peritavision.net.BackendException)?.codigo ?: 0
+                // Token de USO ÚNICO: 401/403/409/410 depois de uma tentativa
+                // que talvez tenha chegado significa que o servidor JÁ tem
+                // esta foto. Insistir era prometer "tento de novo" para
+                // sempre, com a foto já no laudo.
+                if (t > 1 && codigo in listOf(401, 403, 409, 410)) {
+                    android.util.Log.i("PV-Fotos", "repasse de $requestId: token queimado ($codigo) — já estava no servidor")
+                    withContext(Dispatchers.IO) { custodia.confirmarEnvio(requestId, arquivo) }
+                    return true
+                }
+                android.util.Log.w("PV-Fotos", "repasse de $requestId, tentativa $t: ${e.message}")
+                if (t < tentativas) kotlinx.coroutines.delay(3_000L * t)
             }
-            return false
-        } finally {
-            enviosEmCurso.remove(requestId)
-            fotosParadasNoTablet = runCatching { receptorFotos.pendentes().size }.getOrDefault(0)
         }
+        custodia.devolver(requestId)
+        return false
     }
     var receptorEstado by remember { mutableStateOf(com.example.peritavision.rtmp.ReceptorDeVideo.Estado()) }
     var segmentosSubindo by remember { mutableIntStateOf(0) }
@@ -718,9 +667,7 @@ fun CaptureScreen() {
             if (erro != null) {
                 status = "As fotos vão direto ao servidor ($erro) — se a bancada não tiver internet, elas não chegam"
             }
-            fotosParadasNoTablet = withContext(Dispatchers.IO) {
-                runCatching { receptorFotos.pendentes().size }.getOrDefault(0)
-            }
+            withContext(Dispatchers.IO) { custodia.recontarParadas() }
         } else {
             withContext(Dispatchers.IO) { receptorFotos.desligar() }
         }
@@ -728,6 +675,7 @@ fun CaptureScreen() {
     // Chegou um JPEG dos óculos: sela, repassa ao backend e só então conta.
     LaunchedEffect(receptorFotos) {
         receptorFotos.aoMudar = { e -> escopo.launch { receptorFotosEstado = e } }
+        custodia.aoMudar = { resumo -> escopo.launch { resumoFotos = resumo } }
         receptorFotos.aoEstranhar = { texto ->
             escopo.launch { status = "Envio dos óculos não virou foto: $texto" }
         }
@@ -736,13 +684,13 @@ fun CaptureScreen() {
         // conferido. Sem isto qualquer aparelho da rede poderia sobrescrever a
         // foto do perito e queimar o token de uso único.
         receptorFotos.autorizacaoValida = { requestId, token ->
-            val cred = credenciaisDeCaptura[requestId]
+            val cred = custodia.credencial(requestId, null)
             cred != null && (token == null || cred.authToken.isBlank() || token == cred.authToken)
         }
         receptorFotos.aoReceber = { r ->
             escopo.launch {
                 val daSessao = sessaoId
-                if (credencialDe(r.requestId, daSessao) == null) {
+                if (custodia.credencial(r.requestId, daSessao) == null) {
                     android.util.Log.w("PV-Fotos", "foto ${r.requestId} sem credencial: repasse impossível")
                     status = "Foto chegou ao tablet sem autorização casada (${r.requestId.take(8)}) — ficou no tablet"
                     return@launch
@@ -759,19 +707,12 @@ fun CaptureScreen() {
                         kb = r.bytes / 1024, requestId = r.requestId,
                     )
                 }
-                fotosParadasNoTablet = withContext(Dispatchers.IO) {
-                    runCatching { receptorFotos.pendentes().size }.getOrDefault(0)
-                }
-                fotosAguardandoRede += 1
-                val ok = try { repassarFoto(r.requestId, r.arquivo, daSessao, 4) } finally { fotosAguardandoRede -= 1 }
+                // A contagem, a marca no vídeo que cai quando a foto atrasada
+                // chega e a confiança no caminho do tablet são todas da
+                // custódia agora — e todas têm teste.
+                val ok = repassarFoto(r.requestId, r.arquivo, daSessao, 4)
                 if (ok) {
                     fotosEnviadas += 1
-                    // Chegou depois de o relógio já ter marcado o quadro: a
-                    // marca deixa de existir, porque agora há foto de verdade.
-                    if (marcadosSemFoto.remove(r.requestId)) {
-                        quadrosMarcados = (quadrosMarcados - 1).coerceAtLeast(0)
-                    }
-                    tabletNaoRecebeFoto = false
                     status = "Foto $fotosEnviadas no servidor ✓ (${r.bytes / 1024} kB)"
                     falarSeSemIa("Foto capturada. Descreva a evidência.")
                 } else {
@@ -788,18 +729,10 @@ fun CaptureScreen() {
         val daSessao = sessaoId ?: return@LaunchedEffect
         while (true) {
             kotlinx.coroutines.delay(30_000)
-            val paradas = withContext(Dispatchers.IO) { receptorFotos.pendentes() }
-            fotosParadasNoTablet = paradas.size
-            for (arquivo in paradas) {
-                val id = receptorFotos.requestIdDoArquivo(arquivo)
-                if (credencialDe(id, daSessao) == null) continue
-                fotosAguardandoRede += 1
-                val ok = try { repassarFoto(id, arquivo, daSessao, 1) } finally { fotosAguardandoRede -= 1 }
-                if (ok) {
+            val paradas = withContext(Dispatchers.IO) { custodia.pendentesDaSessao(daSessao) }
+            for ((id, arquivo) in paradas) {
+                if (repassarFoto(id, arquivo, daSessao, 1)) {
                     fotosEnviadas += 1
-                    if (marcadosSemFoto.remove(id)) {
-                        quadrosMarcados = (quadrosMarcados - 1).coerceAtLeast(0)
-                    }
                     status = "Foto atrasada subiu ao servidor ✓ (${arquivo.length() / 1024} kB)"
                 }
             }
@@ -1170,25 +1103,15 @@ fun CaptureScreen() {
                 run {
                     var esperaFoto = 0
                     while (esperaFoto < 120_000) {
-                        val paradas = withContext(Dispatchers.IO) { receptorFotos.pendentes() }
-                            .filter { credencialDe(receptorFotos.requestIdDoArquivo(it), id) != null }
-                        fotosParadasNoTablet = paradas.size
+                        val paradas = withContext(Dispatchers.IO) { custodia.pendentesDaSessao(id) }
                         if (paradas.isEmpty()) break
                         status = "Subindo ${paradas.size} foto(s) que estavam no tablet..."
-                        for (arquivo in paradas) {
-                            val rid = receptorFotos.requestIdDoArquivo(arquivo)
-                            if (repassarFoto(rid, arquivo, id, 2)) {
-                                fotosEnviadas += 1
-                                if (marcadosSemFoto.remove(rid)) {
-                                    quadrosMarcados = (quadrosMarcados - 1).coerceAtLeast(0)
-                                }
-                            }
+                        for ((rid, arquivo) in paradas) {
+                            if (repassarFoto(rid, arquivo, id, 2)) fotosEnviadas += 1
                         }
                         kotlinx.coroutines.delay(2_000); esperaFoto += 2_000
                     }
-                    val sobraram = withContext(Dispatchers.IO) { receptorFotos.pendentes() }
-                        .count { credencialDe(receptorFotos.requestIdDoArquivo(it), id) != null }
-                    fotosParadasNoTablet = sobraram
+                    val sobraram = withContext(Dispatchers.IO) { custodia.pendentesDaSessao(id).size }
                     if (sobraram > 0) {
                         vozFeedback.falar(
                             "Atenção: $sobraram foto não subiu ao servidor e ficou no tablet. " +
@@ -1233,8 +1156,7 @@ fun CaptureScreen() {
                 fichaLacre = null
                 fotosEnviadas = 0
                 quadrosMarcados = 0
-                credenciaisDeCaptura.clear()
-                marcadosSemFoto.clear()
+                custodia.encerrarSessao()
                 matriculaNaoCadastrada = null
                 pedidoFinalizarMs = 0L
                 bipe("conversa")
@@ -1321,11 +1243,16 @@ fun CaptureScreen() {
                 // se o formato mudar no servidor, a URL do tablet passaria a
                 // não casar e TODA foto levaria 403. Nesse caso, webhook.
                 val idSeguro = Regex("^[A-Za-z0-9_-]{4,80}$").matches(c.requestId)
-                val noTablet = if (idSeguro && !tabletNaoRecebeFoto) receptorFotos.urlPara(c.requestId) else null
+                val noTablet = if (idSeguro && custodia.deveUsarTablet()) receptorFotos.urlPara(c.requestId) else null
                 if (noTablet == null) {
                     MentraGlassesDevice.AutorizacaoCaptura(c.requestId, c.webhookUrl, c.authToken)
                 } else {
-                    guardarCredencial(id, c)
+                    custodia.guardar(
+                        com.example.peritavision.custodia.CustodiaDeFotos.Credencial(
+                            sessaoId = id, requestId = c.requestId,
+                            webhookUrl = c.webhookUrl, authToken = c.authToken,
+                        )
+                    )
                     // Relógio de desistência: se o arquivo não aparecer, a
                     // captura vira MARCA no vídeo e o perito sabe disso na
                     // bancada, não no painel horas depois. Ele SÓ AVISA — a
@@ -1338,17 +1265,15 @@ fun CaptureScreen() {
                         // Preso À SESSÃO: sem isto, capturar e finalizar em menos
                         // de um minuto fazia "marquei o quadro no vídeo" aparecer
                         // depois de "laudo gerado", na tela da perícia seguinte.
-                        if (sessaoId == id && credenciaisDeCaptura.containsKey(c.requestId) &&
-                            marcadosSemFoto.add(c.requestId)
+                        // A pista está no contador de conexões: se ninguém abriu
+                        // TCP na porta, os óculos não tentaram — não é formato de
+                        // envio, é endereço ou rede. A custódia decide o que fazer
+                        // com essa informação (e isso tem teste).
+                        val houveConexao = receptorFotosEstado.conexoes > 0
+                        if (sessaoId == id && custodia.credencial(c.requestId, id) != null &&
+                            custodia.desistirDaFoto(c.requestId, houveConexao)
                         ) {
-                            quadrosMarcados += 1
-                            // A pista está no contador de conexões: se ninguém
-                            // abriu TCP na porta, os óculos não tentaram — não
-                            // é formato de envio, é endereço ou rede. Nesse
-                            // caso volta ao webhook público, que já funcionava,
-                            // em vez de perder as fotos seguintes também.
-                            if (receptorFotosEstado.conexoes == 0) {
-                                tabletNaoRecebeFoto = true
+                            if (!houveConexao) {
                                 status = "Os óculos não chegaram nem a abrir conexão no tablet " +
                                     "(${receptorFotosEstado.ip}:${receptorFotosEstado.porta}). " +
                                     "As próximas fotos vão direto ao servidor, como antes. " +
@@ -1901,10 +1826,13 @@ fun CaptureScreen() {
             podeCapturar = podeCapturar,
             motivoBloqueio = motivoBloqueio,
             fotosEnviadas = fotosEnviadas,
-            quadrosMarcados = quadrosMarcados,
-            fotosParadasNoTablet = fotosParadasNoTablet,
+            // Marca no vídeo vem de duas fontes: as do caminho do tablet, que a
+            // custódia conta e desfaz quando a foto atrasada chega, e as do
+            // caminho do webhook, que a tela ainda conta na mão.
+            quadrosMarcados = quadrosMarcados + resumoFotos.marcadasNoVideo,
+            fotosParadasNoTablet = resumoFotos.paradasNoTablet,
             rotaDaFoto = when {
-                tabletNaoRecebeFoto -> "A foto vai direto ao servidor (o tablet não recebeu)."
+                !resumoFotos.usandoTablet -> "A foto vai direto ao servidor (o tablet não recebeu)."
                 receptorFotosEstado.ligado && receptorFotosEstado.recebidas > 0 ->
                     "A foto chega no tablet (${receptorFotosEstado.recebidas} até agora) e o tablet repassa ao servidor."
                 receptorFotosEstado.ligado && receptorFotosEstado.conexoes > 0 ->
@@ -1949,7 +1877,8 @@ fun CaptureScreen() {
             // Só o que o app contou como FOTO: quadro marcado não está "subindo",
             // ele só existe se o servidor recortar no fim — senão o placeholder
             // ficaria na tela para sempre.
-            esperando = (fotosEnviadas - fotosDaPericia.count { !it.doVideo }).coerceAtLeast(0) + fotosAguardandoRede,
+            esperando = (fotosEnviadas - fotosDaPericia.count { !it.doVideo }).coerceAtLeast(0) +
+                resumoFotos.aguardandoRede,
             onAmpliar = { fotoAmpliada = it },
         )
     }
