@@ -48,6 +48,37 @@ class ReceptorDeFotos(context: Context) {
     /** Onde os JPEG ficam até o backend confirmar o recebimento. */
     val pasta: File = File(context.applicationContext.filesDir, "fotos")
 
+    /**
+     * O que a tela precisa saber para diagnosticar sem logcat.
+     *
+     * A pergunta do teste de campo é sempre a mesma: os óculos CHEGARAM na
+     * porta? Se ninguém abriu TCP, o problema é o endereço ou a rede, e não o
+     * formato do envio — e essa diferença muda o que se conserta. É a mesma
+     * pista que o receptor de vídeo já dá com `ultimoCliente`.
+     */
+    data class Estado(
+        val ligado: Boolean = false,
+        val ip: String? = null,
+        val porta: Int = 0,
+        /** conexões TCP aceitas na porta desde que o receptor subiu */
+        val conexoes: Int = 0,
+        val ultimoCliente: String? = null,
+        /** resultado do último envio, em texto curto para a tela */
+        val ultimoResultado: String? = null,
+        val recebidas: Int = 0,
+    )
+
+    @Volatile var estado = Estado()
+        private set
+
+    /** Chamado (em thread de rede) a cada mudança que interessa à tela. */
+    var aoMudar: ((Estado) -> Unit)? = null
+
+    private fun mudar(f: (Estado) -> Estado) {
+        estado = f(estado)
+        aoMudar?.invoke(estado)
+    }
+
     /** Chamado em thread de rede quando um arquivo completo chega. */
     var aoReceber: ((Recebida) -> Unit)? = null
     /** Chamado quando alguém bateu na porta e o corpo não deu foto — o texto já
@@ -95,6 +126,7 @@ class ReceptorDeFotos(context: Context) {
                 equipe = Executors.newFixedThreadPool(ATENDENTES)
                 runCatching { faxina() }
                 laco = Thread({ aceitar(s) }, "PV-Fotos").apply { isDaemon = true; start() }
+                mudar { Estado(ligado = true, ip = ip, porta = s.localPort) }
                 Log.i(TAG, "receptor de fotos em http://$ip:$portaEmUso/foto/<requestId>")
                 return null
             } catch (e: IOException) {
@@ -114,6 +146,7 @@ class ReceptorDeFotos(context: Context) {
         equipe = null
         ip = null
         portaEmUso = 0
+        mudar { Estado() }
     }
 
     /** URL que vai para os óculos NO LUGAR do webhook do backend. */
@@ -174,6 +207,7 @@ class ReceptorDeFotos(context: Context) {
                 Log.w(TAG, "accept: ${e.message}")
                 continue
             }
+            mudar { it.copy(conexoes = it.conexoes + 1, ultimoCliente = cliente.inetAddress?.hostAddress) }
             val pool = equipe
             if (pool == null || pool.isShutdown) { runCatching { cliente.close() }; continue }
             try {
@@ -280,6 +314,7 @@ class ReceptorDeFotos(context: Context) {
                 return
             }
             Log.i(TAG, "foto ${arquivo.name} gravada no tablet: ${bytes.size} bytes ($mime)")
+            mudar { it.copy(recebidas = it.recebidas + 1, ultimoResultado = "recebida: ${bytes.size / 1024} kB") }
             responder(cliente, 201, "recebida")
             aoReceber?.invoke(Recebida(requestId, arquivo, bytes.size, mime))
         } catch (e: Exception) {
@@ -299,6 +334,7 @@ class ReceptorDeFotos(context: Context) {
     }
 
     private fun responder(cliente: Socket, codigo: Int, mensagem: String) {
+        if (codigo !in 200..299) mudar { it.copy(ultimoResultado = "$codigo $mensagem") }
         val corpo = "{\"ok\":${codigo in 200..299},\"mensagem\":\"$mensagem\"}".toByteArray()
         val cabecalho = buildString {
             append("HTTP/1.1 $codigo ${if (codigo in 200..299) "OK" else "Erro"}\r\n")

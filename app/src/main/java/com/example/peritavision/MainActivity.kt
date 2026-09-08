@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -554,6 +555,13 @@ fun CaptureScreen() {
     // duas fotos se perderam no caminho. Agora as duas coisas entram pela mesma
     // porta: os óculos entregam o JPEG ao tablet, o tablet mostra a miniatura
     // na hora e repassa ao servidor com repetição.
+    // A IMAGEM dos óculos na tela do tablet. O receptor já entregava os
+    // quadros; ninguém decodificava, e o cartão mostrava só números — o perito
+    // olhou o retângulo preto e disse "o vídeo não aparece no tablet".
+    val decodificador = remember { com.example.peritavision.rtmp.DecodificadorDeVideo() }
+    var decodificadorEstado by remember {
+        mutableStateOf(com.example.peritavision.rtmp.DecodificadorDeVideo.Estado())
+    }
     val receptorFotos = remember { com.example.peritavision.net.ReceptorDeFotos(context) }
     /** Autorizações em voo, por requestId: o tablet precisa do token de uso
      *  único para repassar o JPEG ao backend. */
@@ -573,6 +581,19 @@ fun CaptureScreen() {
      *  partir da PASTA, não de um contador na memória: o perito precisa saber
      *  que sobrou foto mesmo depois de o app ser reaberto. */
     var fotosParadasNoTablet by remember { mutableIntStateOf(0) }
+    /** Matrícula digitada que o servidor não reconheceu: a perícia ficou no
+     *  nome de outro perito, e isso tem de ser DITO na abertura. */
+    var matriculaNaoCadastrada by remember { mutableStateOf<String?>(null) }
+    /** Diagnóstico do receptor de fotos, para a bancada saber se os óculos
+     *  chegaram na porta — sem depender de logcat. */
+    var receptorFotosEstado by remember {
+        mutableStateOf(com.example.peritavision.net.ReceptorDeFotos.Estado())
+    }
+    /** Os óculos não chegaram NEM na porta do tablet: as próximas fotos voltam
+     *  a ser endereçadas ao webhook público, que é o caminho que já funcionava.
+     *  Uma tentativa sem NENHUMA conexão TCP é prova suficiente — insistir só
+     *  perderia mais fotos. */
+    var tabletNaoRecebeFoto by remember { mutableStateOf(false) }
 
     /** Grava a credencial ao lado do JPEG. Em memória ela morria com o
      *  processo e a foto ficava órfã, sem ninguém que pudesse repassá-la. */
@@ -662,6 +683,8 @@ fun CaptureScreen() {
     var segmentosComFalha by remember { mutableIntStateOf(0) }
     LaunchedEffect(receptor) {
         receptor.aoMudar = { e -> receptorEstado = e }
+        receptor.aoQuadro = { q -> decodificador.aceitar(q) }
+        decodificador.aoMudar = { e -> escopo.launch { decodificadorEstado = e } }
         receptor.aoSegmentoFechado = { chave, arquivo ->
             segmentosSubindo += 1
             escopo.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -704,6 +727,7 @@ fun CaptureScreen() {
     }
     // Chegou um JPEG dos óculos: sela, repassa ao backend e só então conta.
     LaunchedEffect(receptorFotos) {
+        receptorFotos.aoMudar = { e -> escopo.launch { receptorFotosEstado = e } }
         receptorFotos.aoEstranhar = { texto ->
             escopo.launch { status = "Envio dos óculos não virou foto: $texto" }
         }
@@ -747,6 +771,7 @@ fun CaptureScreen() {
                     if (marcadosSemFoto.remove(r.requestId)) {
                         quadrosMarcados = (quadrosMarcados - 1).coerceAtLeast(0)
                     }
+                    tabletNaoRecebeFoto = false
                     status = "Foto $fotosEnviadas no servidor ✓ (${r.bytes / 1024} kB)"
                     falarSeSemIa("Foto capturada. Descreva a evidência.")
                 } else {
@@ -872,7 +897,14 @@ fun CaptureScreen() {
             if (!iaEnxergando) ponteGemini?.definirVideo(urlVisao)
         }
     }
-    LaunchedEffect(ponteGemini, fichaLacre, casoAtena, textoRequisicao, avisoRequisicao, requisicaoCarregando, protocolo) {
+    LaunchedEffect(
+        ponteGemini, fichaLacre, casoAtena, textoRequisicao, avisoRequisicao,
+        requisicaoCarregando, protocolo,
+        // Sem estas duas chaves o contexto podia ser montado ANTES de a sessão
+        // dizer de quem é a perícia, e o aviso de responsabilidade nunca
+        // chegaria à IA — que é justamente o que ele precisa anunciar.
+        peritoDaSessao, matriculaNaoCadastrada,
+    ) {
         if (ponteGemini == null) return@LaunchedEffect
         // Espera o documento decidir se existe ou não antes de abrir a boca.
         if (requisicaoCarregando) return@LaunchedEffect
@@ -884,6 +916,20 @@ fun CaptureScreen() {
             // atualizado." — o modo de chamada por nome está no prompt (1.1).
             append("CONTEXTO DO CASO (na PRIMEIRA vez, faça o resumo de abertura falado; se já o fez nesta sessão, responda apenas \"Contexto atualizado.\"): ")
             append("protocolo ${protocolo.trim().ifBlank { "não informado" }}.")
+            // AVISO DE RESPONSABILIDADE (08/09/2026): a matrícula digitada não
+            // existe no cadastro, então o laudo vai sair no nome de outra
+            // pessoa. O perito de luvas não lê a tela — quem tem de dizer isso
+            // é a voz, na primeira frase da abertura. O núcleo do prompt tem a
+            // regra que obriga isso.
+            matriculaNaoCadastrada?.let { mat ->
+                append(" AVISO DE RESPONSABILIDADE: a matrícula $mat, digitada no tablet, NÃO está")
+                append(" cadastrada no sistema. Esta perícia está registrada no nome de")
+                append(" ${peritoDaSessao ?: "quem está logado no tablet"}, e é essa pessoa que vai")
+                append(" assinar o laudo.")
+            }
+            peritoDaSessao?.takeIf { matriculaNaoCadastrada == null }?.let {
+                append(" Perito responsável por esta perícia: $it.")
+            }
             // Dados do Atena resolvidos na abertura da sessão — cobrem o caso
             // aberto por protocolo digitado, sem passar pela leitura do lacre.
             if (a != null) {
@@ -1021,6 +1067,7 @@ fun CaptureScreen() {
                 // SILÊNCIO — o perito só descobria não achando o laudo na
                 // lista dele (campo 08/09/2026).
                 peritoDaSessao = aberta.peritoNome ?: aberta.peritoMatricula
+                matriculaNaoCadastrada = aberta.matriculaDesconhecida
                 if (aberta.matriculaDesconhecida != null) {
                     status = "ATENÇÃO: matrícula ${aberta.matriculaDesconhecida} não existe no sistema — " +
                         "a perícia ficou no nome de ${peritoDaSessao ?: "quem está logado no tablet"}"
@@ -1188,6 +1235,7 @@ fun CaptureScreen() {
                 quadrosMarcados = 0
                 credenciaisDeCaptura.clear()
                 marcadosSemFoto.clear()
+                matriculaNaoCadastrada = null
                 pedidoFinalizarMs = 0L
                 bipe("conversa")
             } catch (e: Exception) {
@@ -1273,7 +1321,7 @@ fun CaptureScreen() {
                 // se o formato mudar no servidor, a URL do tablet passaria a
                 // não casar e TODA foto levaria 403. Nesse caso, webhook.
                 val idSeguro = Regex("^[A-Za-z0-9_-]{4,80}$").matches(c.requestId)
-                val noTablet = if (idSeguro) receptorFotos.urlPara(c.requestId) else null
+                val noTablet = if (idSeguro && !tabletNaoRecebeFoto) receptorFotos.urlPara(c.requestId) else null
                 if (noTablet == null) {
                     MentraGlassesDevice.AutorizacaoCaptura(c.requestId, c.webhookUrl, c.authToken)
                 } else {
@@ -1294,8 +1342,22 @@ fun CaptureScreen() {
                             marcadosSemFoto.add(c.requestId)
                         ) {
                             quadrosMarcados += 1
-                            status = "A foto não chegou ao tablet em 60 s — marquei o quadro no vídeo; " +
-                                "se ela chegar depois, entra como foto e a marca cai"
+                            // A pista está no contador de conexões: se ninguém
+                            // abriu TCP na porta, os óculos não tentaram — não
+                            // é formato de envio, é endereço ou rede. Nesse
+                            // caso volta ao webhook público, que já funcionava,
+                            // em vez de perder as fotos seguintes também.
+                            if (receptorFotosEstado.conexoes == 0) {
+                                tabletNaoRecebeFoto = true
+                                status = "Os óculos não chegaram nem a abrir conexão no tablet " +
+                                    "(${receptorFotosEstado.ip}:${receptorFotosEstado.porta}). " +
+                                    "As próximas fotos vão direto ao servidor, como antes. " +
+                                    "Marquei o quadro no vídeo desta."
+                            } else {
+                                status = "A foto não chegou ao tablet em 60 s (última resposta da porta: " +
+                                    "${receptorFotosEstado.ultimoResultado ?: "nenhuma"}) — marquei o quadro " +
+                                    "no vídeo; se ela chegar depois, entra como foto e a marca cai"
+                            }
                         }
                     }
                     MentraGlassesDevice.AutorizacaoCaptura(c.requestId, noTablet, peloTablet = true, authToken = c.authToken)
@@ -1643,6 +1705,7 @@ fun CaptureScreen() {
             // nenhuma — as fotos voltavam ao webhook público em silêncio.
             runCatching { receptorFotos.desligar() }
             runCatching { receptor.desligar() }
+            runCatching { decodificador.encerrar() }
         }
     }
 
@@ -1840,6 +1903,18 @@ fun CaptureScreen() {
             fotosEnviadas = fotosEnviadas,
             quadrosMarcados = quadrosMarcados,
             fotosParadasNoTablet = fotosParadasNoTablet,
+            rotaDaFoto = when {
+                tabletNaoRecebeFoto -> "A foto vai direto ao servidor (o tablet não recebeu)."
+                receptorFotosEstado.ligado && receptorFotosEstado.recebidas > 0 ->
+                    "A foto chega no tablet (${receptorFotosEstado.recebidas} até agora) e o tablet repassa ao servidor."
+                receptorFotosEstado.ligado && receptorFotosEstado.conexoes > 0 ->
+                    "Os óculos chegaram na porta do tablet, última resposta: " +
+                        (receptorFotosEstado.ultimoResultado ?: "sem resposta")
+                receptorFotosEstado.ligado ->
+                    "Esperando a foto em http://${receptorFotosEstado.ip}:${receptorFotosEstado.porta} " +
+                        "(ninguém chegou à porta ainda)"
+                else -> "A foto vai direto ao servidor (receptor do tablet desligado)."
+            },
             vozAtiva = vozAtiva,
             ouvindoPelosOculos = ouvindoPelosOculos,
             assistenteIa = ponteGemini != null,
@@ -1863,6 +1938,8 @@ fun CaptureScreen() {
             receptor = if (videoNoTablet) receptorEstado else null,
             perfil = (device as? MentraGlassesDevice)?.perfilVideo?.nome ?: "",
             subindo = segmentosSubindo, subidos = segmentosSubidos, comFalha = segmentosComFalha,
+            imagem = if (videoNoTablet) ({ VisorAoVivoDosOculos(decodificador) }) else null,
+            imagemEstado = if (videoNoTablet) decodificadorEstado else null,
         )
     }
     // FOTOS DA PERÍCIA, embaixo do vídeo: miniaturas do que o servidor já tem.
@@ -2274,6 +2351,8 @@ private fun CartaoCaptura(
     quadrosMarcados: Int = 0,
     /** Fotos completas paradas no tablet, esperando o servidor aceitar. */
     fotosParadasNoTablet: Int = 0,
+    /** Por onde a foto está indo, em uma frase — o diagnóstico da bancada. */
+    rotaDaFoto: String? = null,
     vozAtiva: Boolean,
     ouvindoPelosOculos: Boolean,
     /** true quando o assistente IA está ligado: é ELE quem recebe os pedidos
@@ -2295,6 +2374,10 @@ private fun CartaoCaptura(
             tomEtiqueta = if (podeCapturar) Tom.OK else Tom.NEUTRO,
             grande = true,
         )
+        if (rotaDaFoto != null) {
+            TextoApoio(rotaDaFoto, if (rotaDaFoto.startsWith("A foto chega")) Tom.OK else Tom.NEUTRO)
+            Spacer(Modifier.height(6.dp))
+        }
         if (motivoBloqueio != null) {
             TextoApoio(motivoBloqueio)
         } else if (fotosEnviadas > 0 || quadrosMarcados > 0 || fotosParadasNoTablet > 0) {
@@ -2558,11 +2641,47 @@ private fun FotoAmpliada(
     }
 }
 
+/**
+ * A janela onde o decodificador desenha. Um SurfaceView cru, não um player: o
+ * MediaCodec escreve direto na Surface, sem passar bitmap por Kotlin.
+ *
+ * A Surface nasce e morre com a view (o Android a destrói ao apagar a tela ou
+ * ao rolar a lista para longe), e o decodificador precisa saber das duas
+ * coisas — sem o surfaceDestroyed ele continuaria entregando quadro a uma
+ * superfície morta e o codec cairia em IllegalStateException.
+ */
+@Composable
+private fun VisorAoVivoDosOculos(
+    decodificador: com.example.peritavision.rtmp.DecodificadorDeVideo,
+) {
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { ctx ->
+            android.view.SurfaceView(ctx).apply {
+                holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                    override fun surfaceCreated(h: android.view.SurfaceHolder) {
+                        decodificador.definirSuperficie(h.surface)
+                    }
+                    override fun surfaceChanged(h: android.view.SurfaceHolder, formato: Int, largura: Int, altura: Int) {
+                        decodificador.definirSuperficie(h.surface)
+                    }
+                    override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
+                        decodificador.definirSuperficie(null)
+                    }
+                })
+            }
+        },
+    )
+}
+
 @Composable
 private fun CartaoVisaoOculos(
     urlFlv: String?,
     aoVivo: Boolean,
     protocolo: String,
+    /** A imagem ao vivo (SurfaceView do decodificador); null no modo servidor. */
+    imagem: (@Composable () -> Unit)? = null,
+    imagemEstado: com.example.peritavision.rtmp.DecodificadorDeVideo.Estado? = null,
     /** Estado do receptor local (modo "tablet"); null no modo servidor. */
     receptor: com.example.peritavision.rtmp.ReceptorDeVideo.Estado? = null,
     perfil: String = "",
@@ -2599,22 +2718,48 @@ private fun CartaoVisaoOculos(
             protocolo = if (protocolo.isBlank()) "" else "PROT $protocolo",
             legenda = legenda,
             conteudo = {
+                // A IMAGEM primeiro, ocupando o visor. Os números ficam por
+                // cima, pequenos, num canto: eles continuam sendo o diagnóstico
+                // (quantos quadros, quantos MB, qual segmento), mas quem manda
+                // na tela agora é o que os óculos estão vendo.
+                // `imagemEstado != null &&` explícito: com `imagemEstado?.x == true`
+                // o Kotlin não faz smart cast e o acesso seguinte não compila.
+                val comImagem = imagem != null && imagemEstado != null &&
+                    imagemEstado.decodificando && (imagemEstado.quadrosNaTela > 0 || recebendo)
+                if (imagem != null) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) { imagem() }
+                    }
+                }
                 Column(
                     Modifier.fillMaxSize().padding(16.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = if (comImagem) Arrangement.Bottom else Arrangement.Center,
+                    horizontalAlignment = if (comImagem) Alignment.Start else Alignment.CenterHorizontally,
                 ) {
-                    Text(
-                        text = if (receptor.publicando) "%.1f".format(receptor.quadrosPorSegundo) else "—",
-                        style = MaterialTheme.typography.displayMedium,
-                        color = if (recebendo) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text("quadros por segundo", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(10.dp))
+                    if (!comImagem) {
+                        Text(
+                            text = if (receptor.publicando) "%.1f".format(receptor.quadrosPorSegundo) else "—",
+                            style = MaterialTheme.typography.displayMedium,
+                            color = if (recebendo) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text("quadros por segundo", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(10.dp))
+                    } else {
+                        Text(
+                            "%.1f q/s".format(receptor.quadrosPorSegundo) +
+                                (imagemEstado?.let { if (it.largura > 0) " · ${it.largura}x${it.altura}" else "" } ?: ""),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White,
+                        )
+                    }
                     Text(
                         "${receptor.quadros} quadros · %.1f MB · segmento ${receptor.segmentosFechados + if (receptor.publicando) 1 else 0}".format(mb),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = if (comImagem) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodyMedium,
+                        color = if (comImagem) Color.White else MaterialTheme.colorScheme.onSurface,
                     )
+                    imagemEstado?.erro?.let {
+                        Text("imagem: $it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    }
                     val envio = buildString {
                         if (subindo > 0) append("subindo $subindo · ")
                         if (subidos > 0) append("no servidor $subidos · ")
