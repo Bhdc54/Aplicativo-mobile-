@@ -1983,7 +1983,12 @@ private fun CartaoVisaoOculos(
             receptor.erro != null -> receptor.erro
             receptor.publicando && !recebendo -> "Óculos conectados ao tablet, mas sem quadro há mais de 4 s."
             receptor.publicando -> "Recebendo direto dos óculos pela Wi-Fi da bancada — sem internet no caminho."
-            else -> "Aguardando os óculos publicarem em rtmp://${receptor.ip}:${receptor.porta}/pv/…"
+            // Diagnóstico do teste de campo: se ninguém abriu TCP na porta, a
+            // Wi-Fi está isolando os aparelhos; se abriu e não publicou, o
+            // problema é o handshake ou o comando que foi aos óculos.
+            receptor.ultimoCliente != null ->
+                "Os óculos (${receptor.ultimoCliente}) chegaram ao tablet mas não começaram a publicar — handshake."
+            else -> "Aguardando os óculos publicarem em rtmp://${receptor.ip}:${receptor.porta}/pv/… (ninguém chegou à porta ainda)"
         }
         MolduraVisor(
             aoVivo = recebendo,

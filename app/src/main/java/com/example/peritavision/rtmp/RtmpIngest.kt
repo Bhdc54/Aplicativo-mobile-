@@ -74,6 +74,11 @@ class RtmpIngest(
             val motivo: String,
         ) : Evento
 
+        /** Alguém abriu TCP na porta, antes de qualquer handshake. No teste de
+         *  campo é o que separa "a Wi-Fi não deixa os óculos chegarem ao
+         *  tablet" (nada acontece) de "chegaram e o handshake falhou". */
+        data class Conectou(val de: String) : Evento
+
         data class Erro(val mensagem: String) : Evento
     }
 
@@ -90,6 +95,7 @@ class RtmpIngest(
         threadAceite = Thread({
             while (!encerrado.get()) {
                 val cliente = try { s.accept() } catch (e: IOException) { if (!encerrado.get()) aoEvento(Evento.Erro("accept: ${e.message}")); break }
+                aoEvento(Evento.Conectou(cliente.inetAddress.hostAddress ?: "?"))
                 val c = Conexao(cliente)
                 conexoes += c
                 Thread({ try { c.atender() } finally { conexoes -= c } }, "rtmp-cliente-${cliente.inetAddress.hostAddress}").start()

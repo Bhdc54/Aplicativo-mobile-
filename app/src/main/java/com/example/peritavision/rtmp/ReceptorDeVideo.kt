@@ -33,6 +33,8 @@ class ReceptorDeVideo(context: Context) {
         val segmentosFechados: Int = 0,
         val ultimoQuadroMs: Long = 0,
         val ultimoMotivo: String? = null,
+        /** Último endereço que abriu TCP na porta (os óculos, se a rede permitir). */
+        val ultimoCliente: String? = null,
         val erro: String? = null,
     )
 
@@ -97,6 +99,11 @@ class ReceptorDeVideo(context: Context) {
 
     private fun tratar(ev: RtmpIngest.Evento) {
         when (ev) {
+            is RtmpIngest.Evento.Conectou -> {
+                Log.i(TAG, "cliente conectou na porta: ${ev.de}")
+                estado = estado.copy(ultimoCliente = ev.de, erro = null)
+                aoMudar?.invoke(estado)
+            }
             is RtmpIngest.Evento.Publicando -> {
                 instantesDeQuadro.clear(); bytesDoSegmento = 0
                 estado = estado.copy(publicando = true, chave = ev.chave, quadros = 0, bytes = 0, quadrosPorSegundo = 0.0, erro = null)
