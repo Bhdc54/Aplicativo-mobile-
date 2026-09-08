@@ -513,7 +513,13 @@ class MentraGlassesDevice(
                     StreamRequest(
                         streamUrl = urlStream,
                         streamId = "pv-${System.currentTimeMillis()}",
-                        // audio da narracao ja vai pelo BLE; sound=false evita suspender o mic
+                        // `sound` é o BIPE de início/fim nos óculos, NÃO a trilha de
+                        // áudio: o stream sempre carregou o microfone (o SDK tem um
+                        // StreamAudioConfig próprio, com cancelamento de eco, justamente
+                        // por isso). Falso só para o bipe não entrar na gravação da
+                        // perícia. Corrigido em 08/09/2026 — o comentário anterior dizia
+                        // que isto evitava suspender o microfone, o que era suposição
+                        // minha e estava errado: o vídeo do laudo tem áudio.
                         sound = false,
                         // 720p/2 Mbps/30 fps pedia mais do que o Wi-Fi da bancada dava: chegavam
                         // ~6 quadros/s irregulares e o vídeo do laudo saía travado (campo 03/09).
