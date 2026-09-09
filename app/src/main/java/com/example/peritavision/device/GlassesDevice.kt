@@ -56,6 +56,22 @@ sealed interface GlassesEvent {
         val fotoDeVerdade: Boolean = true,
     ) : GlassesEvent
 
+    /**
+     * Os óculos RECUSARAM a foto na hora — "Camera busy with streaming": o
+     * Mentra Live não fotografa enquanto transmite vídeo. Esperar arquivo não
+     * adianta, e foi esperando que a perícia de 09/09/2026 acabou com zero
+     * foto. Quem tem a imagem neste instante é o tablet, que recebe o vídeo:
+     * ele recorta o quadro do visor e sobe como a captura desta autorização.
+     * `webhookUrl`/`authToken` são os da autorização, para o tablet conseguir
+     * subir mesmo quando a foto ia direto ao servidor.
+     */
+    data class FotoRecusada(
+        val requestId: String,
+        val motivo: String,
+        val webhookUrl: String,
+        val authToken: String,
+    ) : GlassesEvent
+
     /** Uma gravacao (video/audio) comecou. */
     data class GravacaoIniciada(val tipo: TipoEvidencia) : GlassesEvent
 

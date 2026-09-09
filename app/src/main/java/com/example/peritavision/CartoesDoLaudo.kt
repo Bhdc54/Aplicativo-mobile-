@@ -350,8 +350,7 @@ internal fun CartaoAssistenteIa(
         // pela voz do perito, fixado em Configurações, ou mantido da memória).
         when {
             perguntandoTrilha -> TextoApoio(
-                "Perguntando o tipo de exame — responda em voz alta: \"objeto cortante\", " +
-                    "\"peça íntima\" ou \"vestuário\".",
+                "A ponte ainda está definindo o roteiro pelos materiais do caso…",
                 Tom.ATENCAO,
             )
             trilha != null -> LinhaCampo("Roteiro", trilha)

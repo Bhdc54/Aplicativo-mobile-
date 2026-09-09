@@ -10,9 +10,10 @@ import android.content.SharedPreferences
  * o backend: são escolhas do tablet, não da perícia. Hoje duas coisas, ambas
  * do assistente de voz (ponte Gemini Live):
  *
- *  - trilha  → qual roteiro a IA carrega. "perguntar" (padrão) deixa a IA
- *              perguntar ao perito na abertura ("objeto cortante ou peça
- *              íntima?"); um id fixo ("A", "B", "nenhuma"...) pula a pergunta.
+ *  - trilha  → qual roteiro a IA carrega. "perguntar" (padrão, nome mantido
+ *              pela preferência já salva nos tablets) deixa a PONTE escolher
+ *              pelos materiais do caso — ninguém pergunta ao perito; um id
+ *              fixo ("A", "B", "nenhuma"...) força aquela trilha.
  *              A lista de ids vem do catálogo da ponte, então uma trilha nova
  *              registrada lá aparece aqui sem mexer no app.
  *  - modelo  → nome do modelo Gemini Live. Vazio = padrão do servidor.
@@ -91,7 +92,7 @@ class ConfiguracoesApp(context: Context) {
         palavraPausa.takeIf { it.isNotBlank() }?.let { put("pausa", it) }
     }
 
-    /** O que vai no {tipo:'iniciar'} da ponte: null = "não fixei, pergunte". */
+    /** O que vai no {tipo:'iniciar'} da ponte: null = "não fixei, escolha pelo caso". */
     fun trilhaParaPonte(): String? = trilha.takeIf { it != TRILHA_PERGUNTAR && it.isNotBlank() }
 
     companion object {

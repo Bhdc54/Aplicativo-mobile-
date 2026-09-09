@@ -492,7 +492,17 @@ class MentraGlassesDevice(
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "requestPhoto falhou (stream ativo? $streamAtivo): ${e.message}")
-                if (autorizacao.peloTablet) {
+                val cameraOcupada = e.message?.contains("busy", ignoreCase = true) == true
+                if (cameraOcupada) {
+                    // Recusa DEFINITIVA, não atraso: os óculos não vão mandar
+                    // arquivo nenhum. O tablet recorta o quadro do vídeo agora.
+                    _eventos.tryEmit(
+                        GlassesEvent.FotoRecusada(
+                            autorizacao.requestId, e.message ?: "câmera ocupada com o vídeo",
+                            autorizacao.webhookUrl, autorizacao.authToken,
+                        )
+                    )
+                } else if (autorizacao.peloTablet) {
                     // `requestPhoto` é suspend e só volta quando o UPLOAD acaba:
                     // um estouro de tempo aqui não quer dizer que a foto não foi
                     // tirada. Com o receptor no tablet, a resposta certa é

@@ -409,7 +409,9 @@ fun CaptureScreen() {
                 escopo.launch { backend.registrarEvento(sid, "marcador", "achado", "ia", a) }
             }
         }
-        // Triagem: a IA vai perguntar "objeto cortante, peça íntima ou vestuário?".
+        // A ponte não pergunta mais o exame (09/09/2026): a trilha vem de
+        // Configurações, da memória ou dos materiais do caso. O evento fica
+        // por compatibilidade com uma ponte antiga ainda no ar.
         ponte.onTriagem = { iaPerguntandoTrilha = true; iaTrilha = null }
         ponte.onVoz = { d -> iaVoz = d }
         // Trilha definida: a sessão de trabalho está de pé com o roteiro certo.
@@ -419,8 +421,10 @@ fun CaptureScreen() {
             iaPerguntandoTrilha = false
             iaTrilha = if (id == "nenhuma") nome else "Trilha ${id.uppercase()} — $nome"
             status = when (origem) {
-                "perito" -> "Roteiro definido pelo perito: $nome."
+                "caso" -> "Roteiro escolhido pelos materiais do caso: $nome."
+                "padrao" -> "Sem roteiro para este material — assistente geral. Fixe uma trilha em Configurações se quiser o passo a passo."
                 "memoria" -> "Sessão retomada — roteiro mantido: $nome."
+                "perito" -> "Roteiro definido pelo perito: $nome."
                 else -> "Roteiro fixado em Configurações: $nome."
             }
             sessaoId?.let { sid ->
@@ -568,6 +572,39 @@ fun CaptureScreen() {
      *  orquestra a rede, que é a parte que precisa de corrotina. */
     val custodia = remember {
         com.example.peritavision.custodia.CustodiaDeFotos(java.io.File(context.filesDir, "fotos"))
+    }
+    /** A SurfaceView do visor ao vivo, enquanto está na tela. É dela que sai
+     *  o quadro quando os óculos recusam a foto por estarem transmitindo. */
+    var visorAoVivo by remember { mutableStateOf<android.view.SurfaceView?>(null) }
+    /**
+     * O quadro que está no visor AGORA, em JPEG, ou null se o visor não está
+     * na tela (modo servidor, tela apagada) ou a cópia falhou. PixelCopy lê a
+     * Surface que o MediaCodec desenha — no tamanho do vídeo (1920x1088), não
+     * no da view.
+     */
+    suspend fun quadroDoVisor(): ByteArray? {
+        val view = visorAoVivo ?: return null
+        if (view.width <= 0 || view.height <= 0 || !view.holder.surface.isValid) return null
+        val largura = decodificadorEstado.largura.takeIf { it > 0 } ?: view.width
+        val altura = decodificadorEstado.altura.takeIf { it > 0 } ?: view.height
+        val bitmap = android.graphics.Bitmap.createBitmap(largura, altura, android.graphics.Bitmap.Config.ARGB_8888)
+        val copiou = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
+            runCatching {
+                android.view.PixelCopy.request(
+                    view, bitmap,
+                    { resultado -> if (cont.isActive) cont.resumeWith(Result.success(resultado == android.view.PixelCopy.SUCCESS)) },
+                    android.os.Handler(android.os.Looper.getMainLooper()),
+                )
+            }.onFailure { if (cont.isActive) cont.resumeWith(Result.success(false)) }
+        }
+        if (!copiou) { bitmap.recycle(); return null }
+        return withContext(Dispatchers.IO) {
+            java.io.ByteArrayOutputStream().use { saida ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, saida)
+                bitmap.recycle()
+                saida.toByteArray()
+            }
+        }
     }
     val receptorFotos = remember { com.example.peritavision.net.ReceptorDeFotos(custodia) }
     var resumoFotos by remember {
@@ -1004,7 +1041,10 @@ fun CaptureScreen() {
                 if (aberta.matriculaDesconhecida != null) {
                     status = "ATENÇÃO: matrícula ${aberta.matriculaDesconhecida} não existe no sistema — " +
                         "a perícia ficou no nome de ${peritoDaSessao ?: "quem está logado no tablet"}"
-                    vozFeedback.falar(
+                    // Pelo portão de UMA voz: com o assistente ligado, quem
+                    // anuncia isso é a IA (regra do núcleo). O TTS do Android
+                    // falando por cima era a segunda voz da abertura (09/09).
+                    falarSeSemIa(
                         "Atenção: a matrícula digitada não existe no sistema. " +
                             "Esta perícia vai ficar no nome de outro usuário.",
                     )
@@ -1363,6 +1403,56 @@ fun CaptureScreen() {
                         quadrosMarcados++
                         status = "Quadro $quadrosMarcados MARCADO no vídeo — não é foto; o servidor tenta recortar no fim"
                         falarSeSemIa("Não consegui a foto. Marquei o quadro no vídeo. Descreva a evidência.")
+                    }
+                }
+                is GlassesEvent.FotoRecusada -> {
+                    // Os óculos não fotografam enquanto transmitem ("Camera busy
+                    // with streaming"). Esperar não adianta — e foi esperando que
+                    // a perícia de 09/09/2026 acabou com ZERO foto. Quem tem a
+                    // imagem agora é o tablet, que recebe o vídeo: recorta o quadro
+                    // do visor neste instante e sobe como a captura desta
+                    // autorização, marcado como quadro do vídeo. Só cai na marca
+                    // para o servidor recortar no fim quando o visor não está na
+                    // tela (modo servidor).
+                    val id = sessaoId
+                    val jpeg = if (id != null) quadroDoVisor() else null
+                    if (id == null || jpeg == null) {
+                        quadrosMarcados++
+                        status = "Os óculos não deram a foto (${evento.motivo}) e o tablet não tem a imagem — " +
+                            "marquei o quadro no vídeo; o servidor tenta recortar no fim"
+                        falarSeSemIa("Não consegui a foto. Marquei o quadro no vídeo. Descreva a evidência.")
+                    } else {
+                        if (custodia.credencial(evento.requestId, id) == null) {
+                            // Foto que ia direto ao servidor: a credencial não passou
+                            // pela custódia. Guarda agora, para o repasse (e a
+                            // retentativa a cada 30 s) funcionar igual ao caminho do tablet.
+                            custodia.guardar(
+                                com.example.peritavision.custodia.CustodiaDeFotos.Credencial(
+                                    sessaoId = id, requestId = evento.requestId,
+                                    webhookUrl = evento.webhookUrl, authToken = evento.authToken,
+                                )
+                            )
+                        }
+                        val arquivo = withContext(Dispatchers.IO) { custodia.gravarFoto(evento.requestId, jpeg, "image/jpeg") }
+                        if (arquivo == null) {
+                            quadrosMarcados++
+                            status = "Recortei o quadro do visor mas não consegui gravá-lo no tablet — marquei o quadro no vídeo"
+                        } else {
+                            val kb = jpeg.size / 1024
+                            fotosDaPericia = fotosDaPericia + FotoNaTela(
+                                id = "tablet:${evento.requestId}", miniatura = miniaturaDe(jpeg), doVideo = true,
+                                kb = kb, requestId = evento.requestId,
+                            )
+                            status = "Câmera dos óculos ocupada com o vídeo — recortei o quadro do visor ($kb kB) e estou subindo como a captura"
+                            if (repassarFoto(evento.requestId, arquivo, id, 4)) {
+                                fotosEnviadas += 1
+                                status = "Quadro do vídeo no servidor como captura $fotosEnviadas ✓ " +
+                                    "($kb kB, ${decodificadorEstado.largura}x${decodificadorEstado.altura}) — os óculos não fotografam enquanto transmitem"
+                                falarSeSemIa("Registrei o quadro do vídeo. Descreva a evidência.")
+                            } else {
+                                status = "Quadro recortado ESTÁ NO TABLET ($kb kB) e o servidor ainda não aceitou — tento a cada 30 s e antes de finalizar"
+                            }
+                        }
                     }
                 }
                 is GlassesEvent.ArquivoCapturado -> {
@@ -1866,7 +1956,7 @@ fun CaptureScreen() {
             receptor = if (videoNoTablet) receptorEstado else null,
             perfil = (device as? MentraGlassesDevice)?.perfilVideo?.nome ?: "",
             subindo = segmentosSubindo, subidos = segmentosSubidos, comFalha = segmentosComFalha,
-            imagem = if (videoNoTablet) ({ VisorAoVivoDosOculos(decodificador) }) else null,
+            imagem = if (videoNoTablet) ({ VisorAoVivoDosOculos(decodificador) { visorAoVivo = it } }) else null,
             imagemEstado = if (videoNoTablet) decodificadorEstado else null,
         )
     }

@@ -361,11 +361,15 @@ internal fun CartaoServidor(
 @Composable
 internal fun VisorAoVivoDosOculos(
     decodificador: com.example.peritavision.rtmp.DecodificadorDeVideo,
+    /** Recebe a SurfaceView quando ela nasce e null quando sai da tela: é dela
+     *  que o app recorta o quadro (PixelCopy) quando os óculos recusam a foto. */
+    aoTerView: (android.view.SurfaceView?) -> Unit = {},
 ) {
+    DisposableEffect(Unit) { onDispose { aoTerView(null) } }
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
-            android.view.SurfaceView(ctx).apply {
+            android.view.SurfaceView(ctx).also(aoTerView).apply {
                 holder.addCallback(object : android.view.SurfaceHolder.Callback {
                     override fun surfaceCreated(h: android.view.SurfaceHolder) {
                         decodificador.definirSuperficie(h.surface)

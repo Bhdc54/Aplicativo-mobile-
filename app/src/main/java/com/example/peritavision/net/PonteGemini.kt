@@ -48,8 +48,8 @@ class PonteGemini(
     private val sessaoId: String,
     /** Modelo Gemini Live escolhido em Configurações; vazio = padrão da ponte. */
     private val modelo: String = "",
-    /** Trilha fixada em Configurações (id do catálogo); null = a IA pergunta
-     *  ao perito na abertura ("objeto cortante ou peça íntima?"). */
+    /** Trilha fixada em Configurações (id do catálogo); null = a ponte
+     *  escolhe pelos materiais do caso (ou abre sem roteiro). */
     private val trilha: String? = null,
     /** Palavras de modo escolhidas pelo perito (modo → palavra); vazio = padrão da ponte. */
     private val palavras: Map<String, String> = emptyMap(),
@@ -57,7 +57,7 @@ class PonteGemini(
     var onTranscricao: (String) -> Unit = {}
     /** A ponte abriu a sessão de TRIAGEM: a IA vai perguntar a trilha. */
     var onTriagem: () -> Unit = {}
-    /** Trilha definida (id, nome, origem 'perito'|'app'|'memoria'): a sessão
+    /** Trilha definida (id, nome, origem 'app'|'memoria'|'caso'|'padrao'): a sessão
      *  de trabalho está de pé com o roteiro certo. */
     var onTrilha: (id: String, nome: String, origem: String) -> Unit = { _, _, _ -> }
     /** MODO de fala da IA: "conversa" | "silencio" | "pausa" (+ origem

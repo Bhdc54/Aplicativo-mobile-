@@ -147,15 +147,16 @@ fun TelaConfiguracoes(
             CartaoPv {
                 CabecalhoCartao(titulo = "Roteiro do exame", grande = true)
                 TextoApoio(
-                    "Qual prompt a IA carrega. No padrão ela pergunta ao perito na abertura " +
-                        "e monta a sessão só com o roteiro daquele exame — prompt menor, IA mais atenta. " +
-                        "Vale para a próxima sessão.",
+                    "Qual prompt a IA carrega. No padrão a ponte escolhe pelos materiais que o Atena " +
+                        "cadastrou no caso e monta a sessão só com aquele roteiro — prompt menor, IA mais atenta. " +
+                        "Ninguém pergunta ao perito. Vale para a próxima sessão.",
                 )
                 Spacer(Modifier.height(10.dp))
                 OpcaoRadio(
                     marcada = trilha == ConfiguracoesApp.TRILHA_PERGUNTAR,
-                    titulo = "Perguntar ao perito na abertura",
-                    descricao = "\"O exame é em objeto cortante, peça íntima ou vestuário?\" — padrão.",
+                    titulo = "Automático pelos materiais do caso",
+                    descricao = "Camisa e calça viram vestuário, faca vira objeto cortante, calcinha vira peça íntima; " +
+                        "sem pista, assistente geral — padrão.",
                     onClick = { trilha = ConfiguracoesApp.TRILHA_PERGUNTAR; config.trilha = trilha },
                 )
                 catalogo.trilhas.forEach { t ->
