@@ -848,6 +848,11 @@ fun BalaoConversa(texto: String, doPerito: Boolean) {
  * Moldura escura do vídeo dos óculos: pílula "AO VIVO" + cronômetro em cima,
  * fonte e protocolo embaixo, mira de enquadramento no centro. O [conteudo]
  * é o player (ou nada, quando ainda não há vídeo).
+ *
+ * Com [imagemLimpa] a moldura mostra só a pílula e o cronômetro: nada de
+ * texto por cima da imagem, nem mira, nem rodapé — e a legenda embaixo só
+ * aparece se vier preenchida. O perito pediu (09/09/2026): "tem como tirar
+ * essas escritas do vídeo?" — os números cobriam o que os óculos estavam vendo.
  */
 @Composable
 fun MolduraVisor(
@@ -857,6 +862,7 @@ fun MolduraVisor(
     protocolo: String,
     legenda: String,
     conteudo: (@Composable () -> Unit)?,
+    imagemLimpa: Boolean = false,
 ) {
     val fundo = Color(0xFF0E141C)
     Column(
@@ -871,19 +877,21 @@ fun MolduraVisor(
                 .height(300.dp),
         ) {
             if (conteudo != null) conteudo()
-            // Mira de enquadramento
-            Box(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(150.dp)
-                    .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(12.dp)),
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(18.dp)
-                    .border(1.5.dp, Color.White.copy(alpha = 0.6f), CircleShape),
-            )
+            // Mira de enquadramento (só sem imagem: por cima do vídeo ela atrapalha)
+            if (!imagemLimpa) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(150.dp)
+                        .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(12.dp)),
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(18.dp)
+                        .border(1.5.dp, Color.White.copy(alpha = 0.6f), CircleShape),
+                )
+            }
             // Pílula AO VIVO
             Row(
                 modifier = Modifier
@@ -921,7 +929,7 @@ fun MolduraVisor(
                     .padding(horizontal = 9.dp, vertical = 5.dp),
             )
             // Rodapé mono: fonte à esquerda, protocolo à direita
-            Row(
+            if (!imagemLimpa) Row(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
@@ -940,7 +948,7 @@ fun MolduraVisor(
                 )
             }
         }
-        Text(
+        if (legenda.isNotBlank()) Text(
             legenda,
             style = MaterialTheme.typography.bodyMedium,
             color = Color.White.copy(alpha = 0.7f),

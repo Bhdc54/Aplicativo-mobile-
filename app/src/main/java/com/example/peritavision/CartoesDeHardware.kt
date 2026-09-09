@@ -57,7 +57,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -423,60 +422,60 @@ internal fun CartaoVisaoOculos(
                 "Os óculos (${receptor.ultimoCliente}) chegaram ao tablet mas não começaram a publicar — handshake."
             else -> "Aguardando os óculos publicarem em rtmp://${receptor.ip}:${receptor.porta}/pv/… (ninguém chegou à porta ainda)"
         }
+        // Com a IMAGEM na tela, nada escrito por cima dela: nem quadros por
+        // segundo, nem MB, nem segmento, nem fonte, nem protocolo — só a
+        // pílula AO VIVO e o cronômetro (09/09/2026: "tem como tirar essas
+        // escritas do vídeo?"). Os números continuam existindo, mas só
+        // aparecem quando não há imagem, que é quando servem de diagnóstico.
+        // `imagemEstado != null &&` explícito: com `imagemEstado?.x == true`
+        // o Kotlin não faz smart cast e o acesso seguinte não compila.
+        val comImagem = imagem != null && imagemEstado != null &&
+            imagemEstado.decodificando && (imagemEstado.quadrosNaTela > 0 || recebendo)
+        val envio = buildString {
+            if (subindo > 0) append("subindo $subindo · ")
+            if (subidos > 0) append("no servidor $subidos · ")
+            if (comFalha > 0) append("FALHOU $comFalha · ")
+        }.trimEnd(' ', '·')
+        // Com imagem boa a legenda cala; ela volta para dizer o que está errado.
+        val legendaComImagem = when {
+            comFalha > 0 -> "Vídeo: $envio."
+            imagemEstado != null && imagemEstado.erro != null -> "Imagem: ${imagemEstado.erro}"
+            !recebendo -> legenda
+            else -> ""
+        }
         MolduraVisor(
             aoVivo = recebendo,
             cronometro = cronometro,
             fonte = "TABLET · $perfil",
             protocolo = if (protocolo.isBlank()) "" else "PROT $protocolo",
-            legenda = legenda,
+            legenda = if (comImagem) legendaComImagem else legenda,
+            imagemLimpa = comImagem,
             conteudo = {
-                // A IMAGEM primeiro, ocupando o visor. Os números ficam por
-                // cima, pequenos, num canto: eles continuam sendo o diagnóstico
-                // (quantos quadros, quantos MB, qual segmento), mas quem manda
-                // na tela agora é o que os óculos estão vendo.
-                // `imagemEstado != null &&` explícito: com `imagemEstado?.x == true`
-                // o Kotlin não faz smart cast e o acesso seguinte não compila.
-                val comImagem = imagem != null && imagemEstado != null &&
-                    imagemEstado.decodificando && (imagemEstado.quadrosNaTela > 0 || recebendo)
                 if (imagem != null) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) { imagem() }
                     }
                 }
-                Column(
+                if (!comImagem) Column(
                     Modifier.fillMaxSize().padding(16.dp),
-                    verticalArrangement = if (comImagem) Arrangement.Bottom else Arrangement.Center,
-                    horizontalAlignment = if (comImagem) Alignment.Start else Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    if (!comImagem) {
-                        Text(
-                            text = if (receptor.publicando) "%.1f".format(receptor.quadrosPorSegundo) else "—",
-                            style = MaterialTheme.typography.displayMedium,
-                            color = if (recebendo) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text("quadros por segundo", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(10.dp))
-                    } else {
-                        Text(
-                            "%.1f q/s".format(receptor.quadrosPorSegundo) +
-                                (imagemEstado?.let { if (it.largura > 0) " · ${it.largura}x${it.altura}" else "" } ?: ""),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Color.White,
-                        )
-                    }
+                    Text(
+                        text = if (receptor.publicando) "%.1f".format(receptor.quadrosPorSegundo) else "—",
+                        style = MaterialTheme.typography.displayMedium,
+                        color = if (recebendo) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text("quadros por segundo", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(10.dp))
                     Text(
                         "${receptor.quadros} quadros · %.1f MB · segmento ${receptor.segmentosFechados + if (receptor.publicando) 1 else 0}".format(mb),
-                        style = if (comImagem) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodyMedium,
-                        color = if (comImagem) Color.White else MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     imagemEstado?.erro?.let {
                         Text("imagem: $it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                     }
-                    val envio = buildString {
-                        if (subindo > 0) append("subindo $subindo · ")
-                        if (subidos > 0) append("no servidor $subidos · ")
-                        if (comFalha > 0) append("FALHOU $comFalha · ")
-                    }.trimEnd(' ', '·')
                     if (envio.isNotBlank()) {
                         Spacer(Modifier.height(4.dp))
                         Text(envio, style = MaterialTheme.typography.labelMedium,
