@@ -45,7 +45,7 @@ class BackendClient(var baseUrl: String) {
     suspend fun login(matricula: String, senha: String): String {
         val corpo = JSONObject().put("matricula", matricula).put("senha", senha)
         val r = postJson("/v1/auth/login", corpo, autenticado = false)
-        val t = r.optString("token").takeIf { it.isNotBlank() }
+        val t = r.texto("token")
             ?: throw BackendException("login sem token: $r")
         token = t
         tokenObtidoEm = System.currentTimeMillis()
@@ -110,7 +110,7 @@ class BackendClient(var baseUrl: String) {
     /** Resolve o protocolo (numero do caso) e devolve o caso completo do Atena. */
     suspend fun resolverProtocolo(protocolo: String): CasoAtena {
         val r = postJson("/v1/casos/resolver", JSONObject().put("numeroProtocolo", protocolo))
-        val id = r.optString("id").takeIf { it.isNotBlank() }
+        val id = r.texto("id")
             ?: throw BackendException("caso sem id: $r")
         fun lista(chave: String): List<String> {
             val a = r.optJSONArray(chave) ?: return emptyList()
@@ -118,10 +118,10 @@ class BackendClient(var baseUrl: String) {
                 when (val v = a.opt(i)) {
                     is String -> v
                     is JSONObject -> buildString {
-                        append(v.optString("descricao"))
+                        append(v.textoOu("descricao"))
                         val q = v.optInt("quantidade", 0)
                         if (q > 0) append(" (quantidade: $q)")
-                        v.optString("lacreEntrada").takeIf { it.isNotBlank() }
+                        v.texto("lacreEntrada")
                             ?.let { append(", lacre de entrada $it") }
                     }
                     else -> null
@@ -130,33 +130,33 @@ class BackendClient(var baseUrl: String) {
         }
         return CasoAtena(
             id = id,
-            numeroProtocolo = r.optString("numeroProtocolo", protocolo),
-            prioridade = r.optString("prioridade").takeIf { it.isNotBlank() },
+            numeroProtocolo = r.textoOu("numeroProtocolo", protocolo),
+            prioridade = r.texto("prioridade"),
             prazoHoras = if (r.has("prazoHoras") && !r.isNull("prazoHoras")) r.optInt("prazoHoras") else null,
             naturezas = lista("naturezas"),
-            autoridade = r.optString("autoridade").takeIf { it.isNotBlank() },
+            autoridade = r.texto("autoridade"),
             materiais = lista("materiais"),
             exames = lista("exames"),
-            unidadeRequisitante = r.optString("unidadeRequisitante").takeIf { it.isNotBlank() },
-            dataOcorrencia = r.optString("dataOcorrencia").takeIf { it.isNotBlank() },
-            statusProtocolo = r.optString("statusProtocolo").takeIf { it.isNotBlank() },
-            areaAtuacao = r.optString("areaAtuacao").takeIf { it.isNotBlank() },
+            unidadeRequisitante = r.texto("unidadeRequisitante"),
+            dataOcorrencia = r.texto("dataOcorrencia"),
+            statusProtocolo = r.texto("statusProtocolo"),
+            areaAtuacao = r.texto("areaAtuacao"),
             envolvidos = r.optJSONArray("envolvidos")?.let { a ->
                 (0 until a.length()).mapNotNull { i ->
                     val p = a.optJSONObject(i) ?: return@mapNotNull null
-                    val nome = p.optString("nome").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                    val papel = p.optString("papel").takeIf { it.isNotBlank() }
+                    val nome = p.texto("nome") ?: return@mapNotNull null
+                    val papel = p.texto("papel")
                     if (papel != null) "$nome ($papel)" else nome
                 }
             } ?: emptyList(),
             documentoPrincipal = r.optJSONObject("documentoPrincipal")?.let { d ->
                 buildString {
-                    d.optString("tipo").takeIf { it.isNotBlank() }?.let { append(it).append(" ") }
-                    d.optString("numero").takeIf { it.isNotBlank() }?.let { append("nº ").append(it) }
-                    d.optString("data").takeIf { it.isNotBlank() }?.let { append(" de ").append(it) }
+                    d.texto("tipo")?.let { append(it).append(" ") }
+                    d.texto("numero")?.let { append("nº ").append(it) }
+                    d.texto("data")?.let { append(" de ").append(it) }
                 }.trim().ifBlank { null }
             },
-            documentoId = r.optString("documentoId").takeIf { it.isNotBlank() },
+            documentoId = r.texto("documentoId"),
         )
     }
 
@@ -169,8 +169,8 @@ class BackendClient(var baseUrl: String) {
         return try {
             val r = getJson("/v1/casos/documento/$documentoId/texto")
             Requisicao(
-                r.optString("texto").takeIf { it.isNotBlank() },
-                r.optString("aviso").takeIf { it.isNotBlank() },
+                r.texto("texto"),
+                r.texto("aviso"),
             )
         } catch (e: Exception) {
             Requisicao(null, e.message ?: "falha ao baixar o documento no Atena")
@@ -204,16 +204,16 @@ class BackendClient(var baseUrl: String) {
         val corpo = JSONObject().put("casoId", casoId).put("perfilId", perfilId)
             .put("matriculaPerito", matriculaPerito)
         val r = postJson("/v1/sessoes", corpo)
-        val id = r.optString("sessaoId").takeIf { it.isNotBlank() }
+        val id = r.texto("sessaoId")
             ?: throw BackendException("sessao sem id: $r")
         return SessaoAberta(
             sessaoId = id,
-            rtmpUrl = r.optString("rtmpUrl").takeIf { it.isNotBlank() },
+            rtmpUrl = r.texto("rtmpUrl"),
             retomada = r.optBoolean("retomada", false),
             fotosRecebidas = r.optInt("fotosRecebidas", 0),
-            peritoNome = r.optString("peritoNome").takeIf { it.isNotBlank() },
-            peritoMatricula = r.optString("peritoMatricula").takeIf { it.isNotBlank() },
-            matriculaDesconhecida = r.optString("matriculaDesconhecida").takeIf { it.isNotBlank() },
+            peritoNome = r.texto("peritoNome"),
+            peritoMatricula = r.texto("peritoMatricula"),
+            matriculaDesconhecida = r.texto("matriculaDesconhecida"),
         )
     }
 
@@ -223,9 +223,9 @@ class BackendClient(var baseUrl: String) {
      */
     suspend fun solicitarCaptura(sessaoId: String): CredencialCaptura {
         val r = postJson("/v1/sessoes/$sessaoId/capturas/solicitar", JSONObject())
-        val requestId = r.optString("requestId")
-        val webhookUrl = r.optString("webhookUrl")
-        val authToken = r.optString("authToken")
+        val requestId = r.textoOu("requestId")
+        val webhookUrl = r.textoOu("webhookUrl")
+        val authToken = r.textoOu("authToken")
         if (requestId.isBlank() || webhookUrl.isBlank()) {
             throw BackendException("resposta de captura incompleta: $r")
         }
@@ -260,9 +260,9 @@ class BackendClient(var baseUrl: String) {
      *  ficava na bancada enquanto o servidor encerrava normalmente. */
     suspend fun finalizarSessao(sessaoId: String): String? {
         val r = postJson("/v1/sessoes/$sessaoId/finalizar", JSONObject(), leituraMs = 90_000)
-        // optString devolve "" quando o campo falta, e "" != null fazia o
+        // texto() em vez de optString: o campo faltava e o "" fazia o
         // cartão anunciar "laudo pronto" sem id nenhum.
-        return r.optString("laudoId").takeIf { it.isNotBlank() }
+        return r.texto("laudoId")
     }
 
     /** SEGMENTO DE VÍDEO gravado no tablet → servidor (destino "tablet", 05/09).
@@ -281,7 +281,7 @@ class BackendClient(var baseUrl: String) {
                 arquivo.inputStream().use { entrada -> conn.outputStream.use { saida -> entrada.copyTo(saida, 256 * 1024) } }
                 val texto = conferir(conn, "POST segmento de vídeo")
                 conn.disconnect()
-                if (texto.isBlank()) "" else JSONObject(texto).optString("sha256")
+                if (texto.isBlank()) "" else JSONObject(texto).textoOu("sha256")
             }
         }
 
@@ -305,14 +305,14 @@ class BackendClient(var baseUrl: String) {
         val a = getArray("/v1/capturas?sessaoId=$sessaoId")
         return (0 until a.length()).mapNotNull { i ->
             val o = a.optJSONObject(i) ?: return@mapNotNull null
-            val id = o.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            if (!o.optString("mime_type", "image/jpeg").startsWith("image")) return@mapNotNull null
+            val id = o.texto("id") ?: return@mapNotNull null
+            if (!o.textoOu("mime_type", "image/jpeg").startsWith("image")) return@mapNotNull null
             FotoDaPericia(
                 id = id,
-                quando = o.optString("capturado_em").takeIf { it.isNotBlank() } ?: o.optString("solicitado_em"),
+                quando = o.texto("capturado_em") ?: o.textoOu("solicitado_em"),
                 bytes = o.optLong("tamanho_bytes", 0),
-                origem = o.optString("origem").takeIf { it.isNotBlank() && it != "null" },
-                requestId = o.optString("request_id").takeIf { it.isNotBlank() && it != "null" },
+                origem = o.texto("origem"),
+                requestId = o.texto("request_id"),
             )
         }
     }
@@ -365,27 +365,27 @@ class BackendClient(var baseUrl: String) {
     /** Poll da leitura: devolve null enquanto processa; lança se status=erro. */
     suspend fun obterLeituraLacre(leituraId: String): FichaLacre? {
         val r = getJson("/v1/lacre/leituras/$leituraId")
-        when (r.optString("status")) {
+        when (r.textoOu("status")) {
             "ok" -> {}
-            "erro" -> throw BackendException(r.optString("erro").ifBlank { "falha na leitura do lacre" })
+            "erro" -> throw BackendException(r.textoOu("erro").ifBlank { "falha na leitura do lacre" })
             else -> return null // aguardando_foto | processando
         }
         val f = r.getJSONObject("ficha")
         val naturezas = f.optJSONArray("naturezas")
         val materiais = f.optJSONArray("materiais")
         return FichaLacre(
-            codigo = f.optString("codigo"),
-            numeroProtocolo = f.optString("numeroProtocolo"),
-            solicitante = f.optString("solicitante").ifBlank { null },
-            unidadeRequisitante = f.optString("unidadeRequisitante").ifBlank { null },
-            vitima = f.optString("vitima").ifBlank { null },
-            dataOcorrencia = f.optString("dataOcorrencia").ifBlank { null },
+            codigo = f.textoOu("codigo"),
+            numeroProtocolo = f.textoOu("numeroProtocolo"),
+            solicitante = f.texto("solicitante"),
+            unidadeRequisitante = f.texto("unidadeRequisitante"),
+            vitima = f.texto("vitima"),
+            dataOcorrencia = f.texto("dataOcorrencia"),
             quantidadeMateriais = f.optInt("quantidadeMateriais"),
             naturezas = (0 until (naturezas?.length() ?: 0)).map { naturezas!!.optString(it) },
             materiais = (0 until (materiais?.length() ?: 0)).map { i ->
                 val m = materiais!!.getJSONObject(i)
-                val lacre = m.optString("lacreEntrada").ifBlank { null }
-                m.optString("descricao") + (lacre?.let { " — lacre $it" } ?: "")
+                val lacre = m.texto("lacreEntrada")
+                m.textoOu("descricao") + (lacre?.let { " — lacre $it" } ?: "")
             },
         )
     }
@@ -404,9 +404,9 @@ class BackendClient(var baseUrl: String) {
             val t = trechos.getJSONObject(i)
             TrechoLaudo(
                 secao = t.optInt("secao"),
-                titulo = t.optString("titulo"),
-                origem = t.optString("origem"),
-                texto = t.optString("texto"),
+                titulo = t.textoOu("titulo"),
+                origem = t.textoOu("origem"),
+                texto = t.textoOu("texto"),
             )
         }
     }
@@ -504,7 +504,7 @@ class BackendClient(var baseUrl: String) {
         val fluxo = if (codigo in 200..299) conn.inputStream else conn.errorStream
         val texto = fluxo?.bufferedReader()?.use { it.readText() }.orEmpty()
         if (codigo !in 200..299) {
-            val motivo = runCatching { JSONObject(texto).optString("erro") }.getOrNull()
+            val motivo = runCatching { JSONObject(texto).textoOu("erro") }.getOrNull()
             throw BackendException("$oque falhou ($codigo): ${motivo.orEmpty().ifBlank { texto }}", codigo)
         }
         return texto

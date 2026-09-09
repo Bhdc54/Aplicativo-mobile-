@@ -281,7 +281,10 @@ class PonteGemini(
                         onModo(modo, msg.optString("origem"))
                     }
                     "achado" -> msg.optJSONObject("achado")?.let { onAchado(it) }
-                    "trilha" -> onTrilha(msg.optString("trilha"), msg.optString("nome"), msg.optString("origem"))
+                    // textoOu(): a ponte manda trilha: null quando volta ao
+                    // assistente geral, e optString transformava isso na
+                    // palavra "null" no cartão de roteiro.
+                    "trilha" -> onTrilha(msg.textoOu("trilha"), msg.textoOu("nome"), msg.textoOu("origem"))
                     "comando" -> onComando(
                         msg.optString("id"), msg.optString("nome"),
                         msg.optJSONObject("argumentos") ?: JSONObject(),

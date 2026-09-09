@@ -409,7 +409,7 @@ fun CaptureScreen() {
                 escopo.launch { backend.registrarEvento(sid, "marcador", "achado", "ia", a) }
             }
         }
-        // Triagem: a IA vai perguntar "objeto cortante ou peça íntima?".
+        // Triagem: a IA vai perguntar "objeto cortante, peça íntima ou vestuário?".
         ponte.onTriagem = { iaPerguntandoTrilha = true; iaTrilha = null }
         ponte.onVoz = { d -> iaVoz = d }
         // Trilha definida: a sessão de trabalho está de pé com o roteiro certo.

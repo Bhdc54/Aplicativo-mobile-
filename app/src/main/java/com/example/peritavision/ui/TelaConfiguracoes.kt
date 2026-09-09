@@ -155,7 +155,7 @@ fun TelaConfiguracoes(
                 OpcaoRadio(
                     marcada = trilha == ConfiguracoesApp.TRILHA_PERGUNTAR,
                     titulo = "Perguntar ao perito na abertura",
-                    descricao = "\"O exame é em objeto cortante ou em peça íntima?\" — padrão.",
+                    descricao = "\"O exame é em objeto cortante, peça íntima ou vestuário?\" — padrão.",
                     onClick = { trilha = ConfiguracoesApp.TRILHA_PERGUNTAR; config.trilha = trilha },
                 )
                 catalogo.trilhas.forEach { t ->
