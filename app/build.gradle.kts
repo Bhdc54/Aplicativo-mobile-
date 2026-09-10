@@ -15,6 +15,23 @@ val propsLocais = Properties().apply {
 fun segredo(chave: String, padrao: String = ""): String =
     "\"" + (propsLocais.getProperty(chave) ?: padrao) + "\""
 
+// VERSÃO do aplicativo: app/versao.properties (versionado). O publicar_apk.ps1
+// avança o versionCode a cada publicação; o versionName é o que o perito vê na
+// página /app e em Configurações.
+val propsVersao = Properties().apply {
+    file("versao.properties").inputStream().use { load(it) }
+}
+val versaoCodigo = propsVersao.getProperty("versionCode").trim().toInt()
+val versaoNome = propsVersao.getProperty("versionName").trim()
+
+// ASSINATURA DE RELEASE: a chave fica FORA do repositório, apontada no
+// local.properties (pv.keystore, pv.keystore.senha, pv.chave.alias,
+// pv.chave.senha). Sem ela o assembleRelease falha de propósito — um APK sem
+// assinatura não instala, e um assinado com chave de debug não atualiza o que
+// já está nos tablets.
+val keystoreCaminho = propsLocais.getProperty("pv.keystore")?.trim().orEmpty()
+val temChaveDeRelease = keystoreCaminho.isNotEmpty() && file(keystoreCaminho).exists()
+
 android {
     namespace = "com.example.peritavision"
     compileSdk {
@@ -30,8 +47,8 @@ android {
         // 36 (exigencia das libs Compose/AGP atuais para COMPILAR); o targetSdk
         // e o que define contra qual Android o app declara rodar.
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = versaoCodigo
+        versionName = versaoNome
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -43,11 +60,27 @@ android {
         buildConfigField("String", "PV_PONTE_URL", segredo("pv.ponte"))
     }
 
+    signingConfigs {
+        if (temChaveDeRelease) {
+            create("release") {
+                storeFile = file(keystoreCaminho)
+                storePassword = propsLocais.getProperty("pv.keystore.senha").orEmpty()
+                keyAlias = propsLocais.getProperty("pv.chave.alias").orEmpty()
+                keyPassword = propsLocais.getProperty("pv.chave.senha").orEmpty()
+            }
+        }
+    }
     buildTypes {
         release {
             optimization {
                 enable = false
             }
+            if (temChaveDeRelease) signingConfig = signingConfigs.getByName("release")
+            // O APK distribuído NUNCA leva login de teste: estes campos vêm
+            // preenchidos do local.properties no debug e aqui são zerados.
+            buildConfigField("String", "PV_MATRICULA", "\"\"")
+            buildConfigField("String", "PV_SENHA", "\"\"")
+            buildConfigField("String", "PV_PROTOCOLO", "\"\"")
         }
     }
     compileOptions {
@@ -103,4 +136,16 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
+}
+// Sem chave de release, o assembleRelease para AQUI, com a instrução — e não
+// no tablet, com "app não instalado".
+gradle.taskGraph.whenReady {
+    val pedeRelease = allTasks.any { it.project == project && it.name.contains("Release") && it.name.startsWith("assemble") }
+    if (pedeRelease && !temChaveDeRelease) {
+        throw GradleException(
+            "Release sem chave de assinatura. Crie a chave uma vez:\n" +
+            "  keytool -genkeypair -v -keystore C:\\dev\\peritavision-release.jks -alias peritavision -keyalg RSA -keysize 2048 -validity 10000\n" +
+            "e aponte no local.properties: pv.keystore=C:/dev/peritavision-release.jks, pv.keystore.senha=..., pv.chave.alias=peritavision, pv.chave.senha=..."
+        )
+    }
 }

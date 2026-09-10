@@ -18,3 +18,7 @@ local.properties
 /build.log
 
 _to_delete/
+
+# chave de assinatura do release: NUNCA no repositório (fica em C:\dev, apontada no local.properties)
+*.jks
+*.keystore
