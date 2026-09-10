@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # PUBLICA UMA VERSÃO DO PERITAVISION (tablet) em peritavision.facilmova.com.br/app
 #
 #   .\publicar_apk.ps1                      avança o build (versionCode) e publica
@@ -8,7 +8,7 @@
 # O que faz, nesta ordem: avança app/versao.properties, compila o release
 # ASSINADO (gradle recusa sem a chave em local.properties), calcula o SHA-256,
 # pede sua matrícula e senha de administrador, envia o APK ao backend
-# (POST /v1/app/apk — as credenciais do bucket ficam no servidor), grava o
+# (POST /v1/app/apk - as credenciais do bucket ficam no servidor), grava o
 # versao.properties num commit e marca a tag v<versão>. Nada de chave do MinIO
 # neste PC.
 # ============================================================================
@@ -84,7 +84,7 @@ git commit -q -m "Publica a versão $novoNome (build $novoCode) do aplicativo do
 if (-not $SemTag) {
   $tag = "v$novoNome"
   if (git tag -l $tag) { $tag = "v$novoNome-b$novoCode" }
-  git tag -a $tag -m "PeritaVision $novoNome (build $novoCode) — SHA-256 $sha"
+  git tag -a $tag -m "PeritaVision $novoNome (build $novoCode) - SHA-256 $sha"
   Write-Host "Tag $tag criada. Envie com: git push origin main --tags" -ForegroundColor Cyan
 }
 Write-Host ""
