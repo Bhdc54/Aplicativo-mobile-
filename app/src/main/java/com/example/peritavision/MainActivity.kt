@@ -533,6 +533,10 @@ fun CaptureScreen() {
     // Wi-Fi DOS OCULOS: o JPEG sobe pela rede do oculos, nao pelo Bluetooth.
     var wifiOculos by remember { mutableStateOf(false) }
     var ssidOculos by remember { mutableStateOf<String?>(null) }
+    /** A rede salva já foi enviada NESTA conexão BLE? Um envio automático por
+     *  conexão: evita o laço "óculos dizem sem Wi-Fi → envia → falha → dizem
+     *  sem Wi-Fi → envia…" e zera quando o BLE cai. */
+    var wifiEnviadaNestaConexao by remember { mutableStateOf(false) }
     // Rede do local vem salva (Configurações) e vai sozinha aos óculos ao conectar.
     var wifiSsid by remember { mutableStateOf(config.wifiSsid) }
     var wifiSenha by remember { mutableStateOf(config.wifiSenha) }
@@ -1342,6 +1346,15 @@ fun CaptureScreen() {
                     // isto o vídeo NUNCA religava na reconexão (o efeito exige
                     // !videoLigado) e o cartão seguia mostrando "AO VIVO".
                     if (!evento.conectado) videoLigado = false
+                    if (!evento.conectado) {
+                        // O BLE caiu e com ele o que sabíamos da Wi-Fi dos óculos.
+                        // Sem zerar, `wifiOculos` ficava true da conexão anterior e
+                        // o reenvio automático abaixo era pulado na volta — a rede
+                        // só ia de novo fechando e abrindo o app (campo 09/09/2026).
+                        wifiOculos = false
+                        ssidOculos = null
+                        wifiEnviadaNestaConexao = false
+                    }
                     status = if (evento.conectado) "Óculos conectado" else "Óculos desconectado"
                     // WI-FI AUTOMÁTICO: conectou e há rede salva → envia sem
                     // pedir nada. Espera 2,5 s para os óculos reportarem o
@@ -1350,7 +1363,8 @@ fun CaptureScreen() {
                     if (evento.conectado && wifiSsid.isNotBlank()) {
                         escopo.launch {
                             delay(2_500)
-                            if (conectado && !wifiOculos) {
+                            if (conectado && !wifiOculos && !wifiEnviadaNestaConexao) {
+                                wifiEnviadaNestaConexao = true
                                 status = "Enviando a Wi-Fi salva (${wifiSsid.trim()}) aos óculos..."
                                 (device as? MentraGlassesDevice)?.configurarWifi(wifiSsid.trim(), wifiSenha)
                             }
@@ -1363,6 +1377,13 @@ fun CaptureScreen() {
                     status = if (evento.conectado)
                         "Óculos na Wi-Fi ${evento.ssid ?: ""} ✓"
                     else "Óculos SEM Wi-Fi — a foto não chega ao servidor"
+                    // Os óculos avisaram que estão SEM rede depois de conectar
+                    // (desligaram e perderam a Wi-Fi): manda a salva, uma vez.
+                    if (!evento.conectado && conectado && wifiSsid.isNotBlank() && !wifiEnviadaNestaConexao) {
+                        wifiEnviadaNestaConexao = true
+                        status = "Óculos sem Wi-Fi — enviando a rede salva (${wifiSsid.trim()})..."
+                        (device as? MentraGlassesDevice)?.configurarWifi(wifiSsid.trim(), wifiSenha)
+                    }
                 }
                 is GlassesEvent.GravacaoIniciada ->
                     status = "Gravando ${evento.tipo.name.lowercase()}..."

@@ -327,8 +327,13 @@ class MentraGlassesDevice(
 
     override fun onGlassesChanged(glasses: GlassesRuntimeState) {
         conectado = glasses is GlassesRuntimeState.Connected
-        if (!conectado) tentandoConectar = false
-        else {
+        if (!conectado) {
+            tentandoConectar = false
+            // BLE caiu: o que sabíamos da Wi-Fi DELES venceu junto. Os óculos
+            // desligados perdem a rede, e manter "conectado" aqui fazia o app
+            // achar que não precisava reenviar a rede salva na volta.
+            wifiConectado = false
+        } else {
             tentativasAutomaticas = 0 // conectou: zera o contador de retentativas
             // ativarAudioNosOculos() — desligado por ora: suspeita de derrubar
             // a conexao BLE em alguns firmwares. Fala sai pelo celular.
