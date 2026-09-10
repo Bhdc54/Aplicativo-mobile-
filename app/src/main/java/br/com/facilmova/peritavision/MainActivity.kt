@@ -709,6 +709,30 @@ fun CaptureScreen() {
                 status = "As fotos vão direto ao servidor ($erro) — se a bancada não tiver internet, elas não chegam"
             }
             withContext(Dispatchers.IO) { custodia.recontarParadas() }
+            // VÍDEO QUE FICOU DE OUTRA PERÍCIA. Um upload que não terminou antes
+            // do finalizar deixava o .flv no tablet para sempre e a perícia sem
+            // vídeo (10/09/2026: 16 min, 600 MB). Agora, com o backend logado
+            // para esta sessão, o que sobrou das anteriores sobe em segundo
+            // plano; o servidor reconsolida ao receber (segmento atrasado).
+            val atual = sessaoId
+            escopo.launch(Dispatchers.IO) {
+                val antigas = receptor.sessoesComSegmentos().filter { it != atual }
+                for (antiga in antigas) {
+                    for (arquivo in receptor.segmentosDe(antiga)) {
+                        val mb = arquivo.length() / 1_000_000.0
+                        val inicioMs = arquivo.name.removeSuffix(".flv").toLongOrNull() ?: arquivo.lastModified()
+                        val ok = runCatching {
+                            val shaServidor = backend.enviarSegmentoVideo(antiga, arquivo, inicioMs)
+                            shaServidor.isBlank() || shaServidor.equals(br.com.facilmova.peritavision.domain.Hashing.sha256(arquivo), ignoreCase = true)
+                        }.getOrElse { e ->
+                            android.util.Log.w("PV-Receptor", "vídeo atrasado ${antiga.take(8)}/${arquivo.name}: ${e.message}"); false
+                        }
+                        if (!ok) break // sem rede ou sessão recusada: tenta na próxima perícia
+                        arquivo.delete()
+                        status = "Vídeo atrasado da perícia ${antiga.take(8)} subiu ao servidor (${"%.0f".format(mb)} MB) — o laudo dela ganha o vídeo sozinho"
+                    }
+                }
+            }
         } else {
             withContext(Dispatchers.IO) { receptorFotos.desligar() }
         }
@@ -1134,8 +1158,8 @@ fun CaptureScreen() {
                         // Isto não é só o vídeo: as fotos que os óculos não
                         // deram são recortadas DO VÍDEO no servidor. Segmento
                         // que não subiu = quadro que não vira imagem no laudo.
-                        vozFeedback.falar("Atenção: parte do vídeo ficou no tablet e não subiu. A perícia será finalizada mesmo assim.")
-                        status = "Vídeo: ${receptor.segmentosDe(id).size} segmento(s) ficaram no tablet (${receptor.pasta}/$id)"
+                        falarSeSemIa("Atenção: parte do vídeo ficou no tablet. A perícia será finalizada mesmo assim, e o vídeo sobe sozinho quando o tablet tiver rede.")
+                        status = "Vídeo: ${receptor.segmentosDe(id).size} segmento(s) ficaram no tablet — sobem sozinhos na próxima perícia aberta com rede, e o laudo ganha o vídeo"
                         kotlinx.coroutines.delay(2_000)
                     }
                 }

@@ -91,6 +91,11 @@ class ReceptorDeVideo(context: Context) {
         return "rtmp://${e.ip}:${e.porta}/pv/$sessaoId"
     }
 
+    /** Sessões que ainda têm .flv no tablet: vídeo que não chegou ao servidor.
+     *  O app varre isto ao abrir a perícia seguinte e reenvia. */
+    fun sessoesComSegmentos(): List<String> =
+        pasta.listFiles { f -> f.isDirectory }?.map { it.name }?.filter { segmentosDe(it).isNotEmpty() }?.sorted() ?: emptyList()
+
     /** Segmentos gravados da sessão, em ordem cronológica (nome = unix-ms). */
     fun segmentosDe(sessaoId: String): List<File> =
         File(pasta, sessaoId).listFiles { f -> f.isFile && f.name.endsWith(".flv") }
@@ -127,8 +132,12 @@ class ReceptorDeVideo(context: Context) {
                 aoQuadro?.invoke(ev)
             }
             is RtmpIngest.Evento.Encerrado -> {
-                estado = estado.copy(publicando = false, segmentosFechados = estado.segmentosFechados + 1,
-                    quadrosPorSegundo = 0.0, ultimoMotivo = ev.motivo, bytes = ev.bytes, quadros = ev.quadros)
+                // Rotação: o arquivo fechou para subir, mas os óculos seguem
+                // publicando no arquivo seguinte — a tela não pode piscar "sem vídeo".
+                estado = estado.copy(publicando = if (ev.continua) estado.publicando else false,
+                    segmentosFechados = estado.segmentosFechados + 1,
+                    quadrosPorSegundo = if (ev.continua) estado.quadrosPorSegundo else 0.0,
+                    ultimoMotivo = ev.motivo, bytes = ev.bytes, quadros = ev.quadros)
                 Log.i(TAG, "segmento fechado ${ev.arquivo.name}: ${ev.bytes} bytes, ${ev.quadros} quadros, ${ev.duracaoMs} ms (${ev.motivo})")
                 aoMudar?.invoke(estado)
                 if (ev.bytes > 13) aoSegmentoFechado?.invoke(ev.chave, ev.arquivo) else ev.arquivo.delete() // só cabeçalho: lixo

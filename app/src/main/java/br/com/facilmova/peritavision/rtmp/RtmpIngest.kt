@@ -64,7 +64,9 @@ class RtmpIngest(
             val cabecalhoDeSequencia: Boolean,
         ) : Evento
 
-        /** O segmento fechou (cliente desconectou, deleteStream, ou ficou mudo). */
+        /** O segmento fechou (cliente desconectou, deleteStream, ou ficou mudo).
+         *  `continua` = foi ROTAÇÃO: o arquivo fechou para subir ao servidor e a
+         *  publicação segue num arquivo novo, sem interrupção. */
         data class Encerrado(
             val chave: String,
             val arquivo: File,
@@ -72,6 +74,7 @@ class RtmpIngest(
             val quadros: Int,
             val duracaoMs: Int,
             val motivo: String,
+            val continua: Boolean = false,
         ) : Evento
 
         /** Alguém abriu TCP na porta, antes de qualquer handshake. No teste de
@@ -137,6 +140,21 @@ class RtmpIngest(
         private var gravador: GravadorFlv? = null
         private var quadros = 0
         private var ultimoTimestamp = 0
+        // ROTAÇÃO DE SEGMENTOS (10/09/2026). Antes, uma perícia era UM .flv,
+        // fechado só no fim: 16 min a 5 Mbps deram 600 MB para subir depois
+        // do "Finalizar", o app esperou os 3 min do teto e a perícia saiu sem
+        // vídeo. Agora o arquivo fecha a cada LIMITE_SEGMENTO_BYTES ou
+        // LIMITE_SEGMENTO_MS, sempre num keyframe, e sobe enquanto a gravação
+        // continua no arquivo seguinte — no fim sobra só o último pedaço.
+        // Cada segmento é um FLV completo (metadados + cabeçalhos de sequência
+        // AVC/AAC + timestamps a partir de zero), para o ffmpeg do servidor
+        // concatenar como já concatena.
+        private var metadados: ByteArray? = null
+        private var sequenciaVideo: ByteArray? = null
+        private var sequenciaAudio: ByteArray? = null
+        private var baseTs = -1
+        private var segmentoAbertoEmMs = 0L
+        private var bytesDoSegmento = 0L
 
         init {
             socket.soTimeout = semDadosMs
@@ -166,7 +184,8 @@ class RtmpIngest(
             fechada = true
             gravador?.let { g ->
                 val r = g.fechar()
-                aoEvento(Evento.Encerrado(chave, g.arquivo, r.first, quadros, ultimoTimestamp, motivo))
+                val duracao = if (baseTs >= 0) ultimoTimestamp - baseTs else ultimoTimestamp
+                aoEvento(Evento.Encerrado(chave, g.arquivo, r.first, quadros, duracao, motivo))
             }
             gravador = null
             try { socket.close() } catch (_: IOException) {}
@@ -268,8 +287,8 @@ class RtmpIngest(
                 4 -> tratarControleDeUsuario(corpo)
                 5 -> janelaAck = lerU32BE(corpo, 0).toLong().coerceAtLeast(1)          // Window Ack Size
                 6 -> {}                                                                // Set Peer Bandwidth
-                8 -> gravar(8, timestamp, corpo)                                       // áudio
-                9 -> { gravar(9, timestamp, corpo); emitirQuadro(timestamp, corpo) }   // vídeo
+                8 -> gravarAudio(timestamp, corpo)                                     // áudio
+                9 -> { gravarVideo(timestamp, corpo); emitirQuadro(timestamp, corpo) } // vídeo
                 18 -> tratarDados(timestamp, corpo)                                    // AMF0 data (@setDataFrame)
                 20 -> tratarComando(csid, streamId, corpo)                             // AMF0 command
                 15, 17 -> {}                                                           // AMF3: os óculos não usam
@@ -326,26 +345,95 @@ class RtmpIngest(
             // "@setDataFrame" "onMetaData" {…} → grava só a partir de "onMetaData",
             // que é o que um arquivo FLV normal carrega.
             val valores = Amf0.decodificarTodos(corpo)
-            if ((valores.getOrNull(0) as? String) == "@setDataFrame") {
+            val brutos = if ((valores.getOrNull(0) as? String) == "@setDataFrame") {
                 val primeiro = Amf0.tamanhoDoPrimeiro(corpo)
-                gravar(18, timestamp, corpo.copyOfRange(primeiro, corpo.size))
-            } else gravar(18, timestamp, corpo)
+                corpo.copyOfRange(primeiro, corpo.size)
+            } else corpo
+            val dados = semDuracao(brutos)
+            metadados = dados
+            gravar(18, timestamp, dados)
         }
+
+        /**
+         * Tira `duration` e `filesize` do onMetaData. O ffmpeg acredita no
+         * duration dos metadados antes de medir os quadros: um segmento de 10 s
+         * carregando "duration=140" do stream inteiro fazia o ffprobe dizer 140 s
+         * e o concat do servidor abrir um buraco de 130 s entre os pedaços (visto
+         * no teste de 10/09/2026). Um encoder ao vivo em geral manda 0, mas não
+         * é garantia — melhor cada segmento medir a própria duração.
+         */
+        private fun semDuracao(dados: ByteArray): ByteArray = try {
+            val valores = Amf0.decodificarTodos(dados)
+            val nome = valores.getOrNull(0) as? String
+            val obj = valores.getOrNull(1) as? Map<*, *>
+            if (nome != "onMetaData" || obj == null) dados
+            else {
+                val limpo = LinkedHashMap<String, Any?>()
+                for ((k, v) in obj) { val ks = k.toString(); if (ks != "duration" && ks != "filesize") limpo[ks] = v }
+                val b = ByteArrayOutputStream()
+                Amf0.codificar(b, nome); Amf0.codificar(b, limpo)
+                b.toByteArray()
+            }
+        } catch (_: Exception) { dados }
 
         // ── Gravação ──────────────────────────────────────────────────────
         private fun abrirSegmento() {
             gravador?.fechar()
             val pasta = File(pastaSaida, chave).apply { mkdirs() }
+            // O nome é o relógio de parede do início do segmento: é o que o
+            // servidor usa para ligar "foto pedida às 11:04" a "segundo 132".
             val arquivo = File(pasta, "${System.currentTimeMillis()}.flv")
             gravador = GravadorFlv(arquivo)
-            quadros = 0; ultimoTimestamp = 0
+            quadros = 0; ultimoTimestamp = 0; baseTs = -1
+            segmentoAbertoEmMs = System.currentTimeMillis(); bytesDoSegmento = 0
             aoEvento(Evento.Publicando(app, chave, arquivo))
         }
 
+        /** Timestamps do arquivo começam em zero no primeiro tag de cada segmento. */
         private fun gravar(tipoTag: Int, timestamp: Int, dados: ByteArray) {
             val g = gravador ?: return
-            g.tag(tipoTag, timestamp, dados)
+            if (baseTs < 0) baseTs = timestamp
+            g.tag(tipoTag, maxOf(0, timestamp - baseTs), dados)
+            bytesDoSegmento += 11L + dados.size + 4
             if (timestamp > ultimoTimestamp) ultimoTimestamp = timestamp
+        }
+
+        private fun gravarAudio(timestamp: Int, dados: ByteArray) {
+            // AAC sequence header: soundFormat 10, AACPacketType 0.
+            if (dados.size >= 2 && ((dados[0].toInt() and 0xf0) ushr 4) == 10 && dados[1].toInt() == 0) sequenciaAudio = dados
+            gravar(8, timestamp, dados)
+        }
+
+        private fun gravarVideo(timestamp: Int, dados: ByteArray) {
+            if (dados.size < 2) { gravar(9, timestamp, dados); return }
+            val frameType = (dados[0].toInt() and 0xf0) ushr 4
+            val codec = dados[0].toInt() and 0x0f
+            if (codec == 7 && dados[1].toInt() == 0) sequenciaVideo = dados // AVCDecoderConfigurationRecord
+            // Só troca de arquivo num KEYFRAME: o segmento novo tem que abrir
+            // com um quadro que se decodifica sozinho.
+            if (frameType == 1 && gravador != null && deveRotacionar()) rotacionar(timestamp)
+            gravar(9, timestamp, dados)
+        }
+
+        private fun deveRotacionar(): Boolean =
+            bytesDoSegmento >= LIMITE_SEGMENTO_BYTES ||
+                System.currentTimeMillis() - segmentoAbertoEmMs >= LIMITE_SEGMENTO_MS
+
+        private fun rotacionar(timestampDoKeyframe: Int) {
+            val g = gravador ?: return
+            val r = g.fechar()
+            val duracao = if (baseTs >= 0) ultimoTimestamp - baseTs else ultimoTimestamp
+            aoEvento(Evento.Encerrado(chave, g.arquivo, r.first, quadros, duracao,
+                "rotação (${r.first / 1_000_000} MB)", continua = true))
+            gravador = null
+            abrirSegmento()
+            // O arquivo novo nasce completo: metadados e cabeçalhos de sequência
+            // no tempo zero, e o keyframe que motivou a troca vem logo atrás.
+            baseTs = timestampDoKeyframe
+            val novo = gravador ?: return
+            metadados?.let { novo.tag(18, 0, it); bytesDoSegmento += 11L + it.size + 4 }
+            sequenciaVideo?.let { novo.tag(9, 0, it); bytesDoSegmento += 11L + it.size + 4 }
+            sequenciaAudio?.let { novo.tag(8, 0, it); bytesDoSegmento += 11L + it.size + 4 }
         }
 
         private fun emitirQuadro(timestamp: Int, dados: ByteArray) {
@@ -427,6 +515,10 @@ class RtmpIngest(
     }
 
     companion object {
+        /** Tamanho/tempo que fecham um segmento e o mandam subir. 48 MB a 5 Mbps
+         *  são ~75 s de vídeo; 3 min é o teto para vídeo de bitrate baixo. */
+        const val LIMITE_SEGMENTO_BYTES = 48L * 1024 * 1024
+        const val LIMITE_SEGMENTO_MS = 180_000L
         fun u24(v: Int) = byteArrayOf((v ushr 16).toByte(), (v ushr 8).toByte(), v.toByte())
         fun u32(v: Int) = byteArrayOf((v ushr 24).toByte(), (v ushr 16).toByte(), (v ushr 8).toByte(), v.toByte())
         fun lerU32BE(b: ByteArray, i: Int): Int =
