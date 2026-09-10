@@ -33,7 +33,7 @@ val keystoreCaminho = propsLocais.getProperty("pv.keystore")?.trim().orEmpty()
 val temChaveDeRelease = keystoreCaminho.isNotEmpty() && file(keystoreCaminho).exists()
 
 android {
-    namespace = "com.example.peritavision"
+    namespace = "br.com.facilmova.peritavision"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -41,7 +41,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.peritavision"
+        applicationId = "br.com.facilmova.peritavision"
         minSdk = 30
         // Android 15 (API 35): versao do tablet da bancada. compileSdk continua
         // 36 (exigencia das libs Compose/AGP atuais para COMPILAR); o targetSdk
