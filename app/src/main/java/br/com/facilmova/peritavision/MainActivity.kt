@@ -95,7 +95,7 @@ import br.com.facilmova.peritavision.ui.LinhaDado
 import br.com.facilmova.peritavision.ui.PeritavisionTheme
 import br.com.facilmova.peritavision.ui.Prontidao
 import br.com.facilmova.peritavision.ui.PvTheme
-import br.com.facilmova.peritavision.ui.RodapeMarca
+import br.com.facilmova.peritavision.ui.RodapeAssinatura
 import br.com.facilmova.peritavision.ui.TextoApoio
 import br.com.facilmova.peritavision.ui.Tom
 import br.com.facilmova.peritavision.voice.VoiceTrigger
@@ -113,7 +113,6 @@ import kotlinx.coroutines.withContext
  *  turno gigante consome a janela de contexto e emudece o modelo. */
 private const val LIMITE_REQUISICAO_BANCADA = 8000
 
-private const val NOME_EMPRESA = "Facilmova"
 private const val SLOGAN_APP = "Perícia assistida · POLITEC-MT"
 
 // Hardware alvo: Mentra Live (BLE pelo proprio app).
@@ -1970,12 +1969,12 @@ fun CaptureScreen() {
                 !resumoFotos.usandoTablet -> "A foto vai direto ao servidor (o tablet não recebeu)."
                 receptorFotosEstado.ligado && receptorFotosEstado.recebidas > 0 ->
                     "A foto chega no tablet (${receptorFotosEstado.recebidas} até agora) e o tablet repassa ao servidor."
+                // Endereço e porta foram para o log (12/09/2026): na bancada o
+                // perito precisa saber o que está acontecendo, não o IP.
                 receptorFotosEstado.ligado && receptorFotosEstado.conexoes > 0 ->
-                    "Os óculos chegaram na porta do tablet, última resposta: " +
-                        (receptorFotosEstado.ultimoResultado ?: "sem resposta")
+                    "Os óculos acharam o tablet; aguardando a foto chegar."
                 receptorFotosEstado.ligado ->
-                    "Esperando a foto em http://${receptorFotosEstado.ip}:${receptorFotosEstado.porta} " +
-                        "(ninguém chegou à porta ainda)"
+                    "Aguardando a foto dos óculos."
                 else -> "A foto vai direto ao servidor (receptor do tablet desligado)."
             },
             vozAtiva = vozAtiva,
@@ -2118,7 +2117,7 @@ fun CaptureScreen() {
                 cartaoAssistente()
                 cartaoEvidencia()
             }
-            RodapeMarca(NOME_EMPRESA)
+            RodapeAssinatura()
         }
 
         // Rodapé de mensagem único: a pílula acompanha o tom do status.

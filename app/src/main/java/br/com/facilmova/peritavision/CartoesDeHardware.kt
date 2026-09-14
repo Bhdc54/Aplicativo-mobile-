@@ -415,12 +415,12 @@ internal fun CartaoVisaoOculos(
             receptor.erro != null -> receptor.erro
             receptor.publicando && !recebendo -> "Óculos conectados ao tablet, mas sem quadro há mais de 4 s."
             receptor.publicando -> "Recebendo direto dos óculos pela Wi-Fi da bancada — sem internet no caminho."
-            // Diagnóstico do teste de campo: se ninguém abriu TCP na porta, a
-            // Wi-Fi está isolando os aparelhos; se abriu e não publicou, o
-            // problema é o handshake ou o comando que foi aos óculos.
+            // O diagnóstico de rede (endereço, porta, handshake) foi para o log
+            // em 12/09/2026: na tela ele não ajuda o perito e assusta quem está
+            // assistindo. Aqui fica o que dá para FAZER a respeito.
             receptor.ultimoCliente != null ->
-                "Os óculos (${receptor.ultimoCliente}) chegaram ao tablet mas não começaram a publicar — handshake."
-            else -> "Aguardando os óculos publicarem em rtmp://${receptor.ip}:${receptor.porta}/pv/… (ninguém chegou à porta ainda)"
+                "Os óculos acharam o tablet, mas ainda não começaram a transmitir. Aguarde alguns segundos."
+            else -> "Aguardando os óculos transmitirem. Confira se estão na mesma Wi-Fi da bancada."
         }
         // Com a IMAGEM na tela, nada escrito por cima dela: nem quadros por
         // segundo, nem MB, nem segmento, nem fonte, nem protocolo — só a

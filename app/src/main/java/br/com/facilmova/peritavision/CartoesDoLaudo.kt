@@ -142,12 +142,18 @@ internal fun CartaoLaudoEmPreenchimento(
 ) {
     val autoridade = caso?.autoridade ?: ficha?.solicitante
     val orgao = caso?.unidadeRequisitante ?: ficha?.unidadeRequisitante
-    val dataOcorrencia = caso?.dataOcorrencia ?: ficha?.dataOcorrencia
+    // Data em ISO ("2026-02-04T04:00:00.000+00:00") não se lê numa bancada.
+    val dataOcorrencia = dataLegivel(caso?.dataOcorrencia ?: ficha?.dataOcorrencia)
     val vitima = ficha?.vitima
-    val materiais = caso?.materiais?.ifEmpty { null } ?: ficha?.materiais ?: emptyList()
-    val objetivos = caso?.exames?.ifEmpty { null }
-        ?: caso?.naturezas?.ifEmpty { null }
-        ?: ficha?.naturezas ?: emptyList()
+    // paraTela: o ATENA às vezes manda objeto onde devia vir texto, e o item
+    // chegava aqui como JSON cru ({"numeroProtocolo":"054466/2026"}). Some da
+    // tela; se sobrar nada, a seção fica pendente, que é a verdade.
+    val materiais = paraTela(caso?.materiais?.ifEmpty { null } ?: ficha?.materiais ?: emptyList())
+    val objetivos = paraTela(
+        caso?.exames?.ifEmpty { null }
+            ?: caso?.naturezas?.ifEmpty { null }
+            ?: ficha?.naturezas ?: emptyList(),
+    )
 
     val historico = buildList {
         autoridade?.let { add("Autoridade" to it) }
@@ -155,6 +161,8 @@ internal fun CartaoLaudoEmPreenchimento(
         dataOcorrencia?.let { add("Data da ocorrência" to it) }
         vitima?.let { add("Vítima" to it) }
     }
+
+    val consideracoes = narracaoParaOLaudo(narracoes)
 
     val secoes = listOf(
         SecaoLaudo(1, "Histórico", preenchida = historico.isNotEmpty(),
@@ -169,9 +177,11 @@ internal fun CartaoLaudoEmPreenchimento(
             dica = "Os achados que você enunciar (\"item um, sangue negativo\") entram aqui; as fotos viram figuras.",
             campos = listOf("Figuras" to "$fotosSeladas foto(s) selada(s) por hash", "Achados" to "${achados.size} registrado(s)"),
             itens = achados.takeLast(5)),
-        SecaoLaudo(6, "Considerações", preenchida = narracoes.isNotEmpty(),
+        // Só o que DESCREVE entra: "Sim.", "firm", "eu quero capturar" são
+        // conversa com a IA e não são consideração de laudo nenhum.
+        SecaoLaudo(6, "Considerações", preenchida = consideracoes.isNotEmpty(),
             dica = "O que você narrar na bancada entra aqui.",
-            itens = narracoes.takeLast(3).map { if (it.length > 180) it.take(180) + "…" else it }),
+            itens = consideracoes.takeLast(3).map { if (it.length > 180) it.take(180) + "…" else it }),
         SecaoLaudo(7, "Conclusão", preenchida = false,
             dica = "Só o perito escreve — no painel web, na revisão."),
         SecaoLaudo(8, "Disposições finais", preenchida = false,
@@ -355,8 +365,11 @@ internal fun CartaoAssistenteIa(
             )
             trilha != null -> LinhaCampo("Roteiro", trilha)
         }
-        if (voz.isNotBlank()) {
-            TextoApoio("Voz $voz", if (voz.startsWith("ERRO")) Tom.ERRO else null)
+        // O diagnóstico da saída de voz ("→ Mentra_Live_0706 · 20 trecho(s)")
+        // é para quem está depurando, não para o perito — e muito menos para
+        // quem assiste a uma perícia. Só o ERRO continua à vista.
+        if (voz.startsWith("ERRO")) {
+            TextoApoio("Voz $voz", Tom.ERRO)
         }
         if (!enxergando) {
             TextoApoio(

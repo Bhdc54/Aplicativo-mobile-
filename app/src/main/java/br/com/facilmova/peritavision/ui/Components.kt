@@ -129,6 +129,10 @@ fun BarraDeTopo(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        // A logo da Facilmova saiu daqui em 12/09/2026 e foi para a assinatura
+        // do rodapé (RodapeAssinatura): o topo é do cliente — brasão da POLITEC,
+        // nome do produto e o caso em andamento —, e três marcas na mesma linha
+        // deixavam a barra apertada numa tela de demonstração.
         if (onConfiguracoes != null) {
             Box(
                 modifier = Modifier
@@ -144,23 +148,6 @@ fun BarraDeTopo(
                     modifier = Modifier.size(22.dp),
                 )
             }
-            Spacer(Modifier.width(4.dp))
-        } else {
-            Spacer(Modifier.width(11.dp))
-        }
-        // Facil Mova: do outro lado, numa pílula de contorno.
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(9.dp))
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(9.dp))
-                .background(Color.White)
-                .padding(horizontal = 10.dp, vertical = 7.dp),
-        ) {
-            Image(
-                painter = painterResource(id = R.drawable.logo_facilmova),
-                contentDescription = "Facil Mova",
-                modifier = Modifier.height(20.dp),
-            )
         }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
