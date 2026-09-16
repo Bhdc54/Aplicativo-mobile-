@@ -26,9 +26,13 @@ import com.mentra.bluetoothsdk.SwipeEvent
 import com.mentra.bluetoothsdk.TouchEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -97,6 +101,18 @@ class MentraGlassesDevice(
     private var tentativasAutomaticas = 0
     private val MAX_TENTATIVAS_AUTOMATICAS = 3
 
+    // RECONEXÃO DE UMA LIGAÇÃO QUE CAIU (14/09/2026). O retry acima só cobria o
+    // PRIMEIRO scan não achar nada. Quando um óculos JÁ CONECTADO caía — e caiu
+    // aos 3 min numa apresentação de teste — o app apenas escrevia "Óculos
+    // desconectado" e ficava parado esperando o perito tocar em CONECTAR.
+    // Agora ele mesmo tenta voltar, com espera crescente, por ~2 min; na volta
+    // a tela reenvia a Wi-Fi salva e religa o vídeo (MainActivity já faz isso
+    // ao receber Conexao(true)). Só não insiste se foi o perito que desligou.
+    private var reconexao: Job? = null
+    private var desligadoPeloPerito = false
+    private var conectadoDesdeMs = 0L
+    private val ESPERAS_RECONEXAO_MS = longArrayOf(2_000, 4_000, 8_000, 15_000, 20_000, 30_000, 30_000)
+
     // ------------------------------------------------------------------------
     // Conexao (nao esta na interface; especifico do acessorio BLE)
     // ------------------------------------------------------------------------
@@ -104,11 +120,50 @@ class MentraGlassesDevice(
     /** Inicia a conexao: tenta o dispositivo padrao; se nao houver, escaneia. */
     fun conectar() {
         tentativasAutomaticas = 0
+        desligadoPeloPerito = false
+        reconexao?.cancel(); reconexao = null
         if (config.autoConectar && sdk.getDefaultDevice() != null) {
             sdk.connectDefault()
             return
         }
         escanear()
+    }
+
+    /**
+     * Laço de volta depois de uma queda: espera, tenta o dispositivo padrão
+     * (ou escaneia, se não houver), e repete com esperas maiores. Para assim
+     * que [onGlassesChanged] disser que conectou, ou se o perito desligar.
+     */
+    private fun agendarReconexao() {
+        if (reconexao?.isActive == true) return
+        reconexao = scope.launch {
+            for ((i, espera) in ESPERAS_RECONEXAO_MS.withIndex()) {
+                delay(espera)
+                if (conectado || desligadoPeloPerito) return@launch
+                val n = i + 1
+                _eventos.tryEmit(
+                    GlassesEvent.Aviso("Óculos caíram — reconectando ($n/${ESPERAS_RECONEXAO_MS.size})...")
+                )
+                Log.w(TAG, "reconexao BLE: tentativa $n")
+                try {
+                    pararScan?.invoke(); pararScan = null
+                    if (sdk.getDefaultDevice() != null) sdk.connectDefault() else escanear()
+                } catch (e: Exception) {
+                    // Bluetooth do tablet desligado, SDK ocupado com a tentativa
+                    // anterior... vira log; a próxima volta do laço tenta de novo.
+                    Log.w(TAG, "reconexao BLE: tentativa $n nao iniciou: ${e.message}")
+                }
+            }
+            delay(10_000) // dá tempo à última tentativa
+            if (!conectado && !desligadoPeloPerito) {
+                _eventos.tryEmit(
+                    GlassesEvent.Erro(
+                        "Os óculos não voltaram sozinhos. Confira se estão ligados e perto " +
+                            "do tablet e toque em CONECTAR ÓCULOS."
+                    )
+                )
+            }
+        }
     }
 
     /**
@@ -146,6 +201,9 @@ class MentraGlassesDevice(
      * (até [MAX_TENTATIVAS_AUTOMATICAS] vezes) antes de pedir ação manual —
      */
     override fun onScanStopped(reason: ScanStopReason) {
+        // Durante a reconexão automática quem manda é o laço de agendarReconexao;
+        // o retry do scan inicial não pode se meter no meio.
+        if (reconexao?.isActive == true) return
         if (!conectado && !tentandoConectar) {
             if (tentativasAutomaticas < MAX_TENTATIVAS_AUTOMATICAS) {
                 tentativasAutomaticas++
@@ -162,7 +220,10 @@ class MentraGlassesDevice(
         }
     }
 
+    /** Desligamento pedido pelo perito: aqui NÃO se reconecta sozinho. */
     fun desconectar() {
+        desligadoPeloPerito = true
+        reconexao?.cancel(); reconexao = null
         sdk.disconnect()
     }
 
@@ -182,11 +243,28 @@ class MentraGlassesDevice(
             _eventos.tryEmit(GlassesEvent.Erro("informe o nome da rede (SSID)"))
             return
         }
+        // Um envio por vez: o SDK recusa o segundo ("already waiting") e o
+        // reenvio automático da tela podia cair em cima do toque do perito.
+        if (enviandoWifi) {
+            _eventos.tryEmit(GlassesEvent.Aviso("Envio de Wi-Fi já em andamento — aguarde."))
+            return
+        }
+        enviandoWifi = true
         scope.launch {
             try {
                 // Diagnóstico primeiro: os óculos ENXERGAM essa rede? (2.4 GHz apenas)
+                // COM PRAZO (15/09/2026): o requestWifiScan é suspend e, em campo,
+                // ficou sem voltar — e o envio da rede, que vem depois, nunca
+                // acontecia. A tela dizia "Procurando..." para sempre e parecia
+                // que o app "não puxava o Wi-Fi". Sem resposta em 6 s, segue sem
+                // o diagnóstico: o que importa é enviar a rede.
                 _eventos.tryEmit(GlassesEvent.Aviso("Procurando \"$ssid\" pelos óculos..."))
-                val redes = runCatching { sdk.requestWifiScan() }.getOrDefault(emptyList())
+                val redes = withTimeoutOrNull(6_000) {
+                    runCatching { sdk.requestWifiScan() }.getOrDefault(emptyList())
+                } ?: run {
+                    Log.w(TAG, "requestWifiScan sem resposta em 6 s — enviando a rede sem o diagnóstico")
+                    emptyList()
+                }
                 if (redes.isNotEmpty() && redes.none { it.ssid.equals(ssid.trim(), ignoreCase = true) }) {
                     val visiveis = redes.sortedByDescending { it.signalStrength }
                         .take(5).joinToString(", ") { it.ssid }
@@ -198,7 +276,11 @@ class MentraGlassesDevice(
                     )
                 }
                 _eventos.tryEmit(GlassesEvent.Aviso("Enviando Wi-Fi \"$ssid\" aos óculos..."))
-                val resposta = sdk.sendWifiCredentials(ssid = ssid.trim(), password = senha)
+                // Prazo externo: se o SDK não voltar, o estado real chega por
+                // onWifiStatusChanged; aqui não pode ficar preso para sempre.
+                val resposta = withTimeout(45_000) {
+                    sdk.sendWifiCredentials(ssid = ssid.trim(), password = senha)
+                }
                 Log.d(TAG, "sendWifiCredentials -> $resposta")
                 val st = resposta.status
                 if (st is WifiStatus.Connected) {
@@ -223,9 +305,14 @@ class MentraGlassesDevice(
                     )
                     else -> _eventos.tryEmit(GlassesEvent.Erro("falha ao enviar Wi-Fi: $msg"))
                 }
+            } finally {
+                enviandoWifi = false
             }
         }
     }
+
+    /** true enquanto um sendWifiCredentials está em curso. */
+    @Volatile private var enviandoWifi = false
 
     /** Pede aos oculos a lista de redes visiveis. Tambem e suspend. */
     fun escanearWifi() {
@@ -326,6 +413,7 @@ class MentraGlassesDevice(
     // ------------------------------------------------------------------------
 
     override fun onGlassesChanged(glasses: GlassesRuntimeState) {
+        val estavaConectado = conectado
         conectado = glasses is GlassesRuntimeState.Connected
         if (!conectado) {
             tentandoConectar = false
@@ -333,8 +421,19 @@ class MentraGlassesDevice(
             // desligados perdem a rede, e manter "conectado" aqui fazia o app
             // achar que não precisava reenviar a rede salva na volta.
             wifiConectado = false
+            if (estavaConectado) {
+                // Queda de uma ligação que estava de pé. O tempo que durou e o
+                // estado que o SDK mandou vão para o logcat: é o que diz se foi
+                // o óculos que apagou, o Bluetooth do tablet ou o app em segundo
+                // plano. Depois disso, a volta automática.
+                val duracaoS = (System.currentTimeMillis() - conectadoDesdeMs) / 1000
+                Log.w(TAG, "BLE caiu apos ${duracaoS}s conectado; estado=$glasses")
+                if (!desligadoPeloPerito) agendarReconexao()
+            }
         } else {
             tentativasAutomaticas = 0 // conectou: zera o contador de retentativas
+            conectadoDesdeMs = System.currentTimeMillis()
+            reconexao?.cancel(); reconexao = null
             // ativarAudioNosOculos() — desligado por ora: suspeita de derrubar
             // a conexao BLE em alguns firmwares. Fala sai pelo celular.
         }
@@ -774,6 +873,7 @@ class MentraGlassesDevice(
     }
 
     override fun encerrar() {
+        desligadoPeloPerito = true
         pararScan?.invoke(); pararScan = null
         scope.cancel()
         if (micLigado) { runCatching { sdk.setMicState(enabled = false) }; micLigado = false }

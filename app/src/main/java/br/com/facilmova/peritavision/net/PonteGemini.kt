@@ -129,15 +129,21 @@ class PonteGemini(
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build(),
             )
-            .setBufferSizeInBytes(minimo * 4)
+            // Buffer de pelo menos 1 s de som (15/09/2026). Com minimo*4 (~0,3 s)
+            // qualquer soluço de rede entre a ponte e o tablet esvaziava o
+            // buffer e a voz saía picada — "fala e corta". Um segundo de folga
+            // absorve o soluço; a janela do microfone não muda, porque ela é
+            // somada pela duração do que foi escrito, não pelo tamanho do buffer.
+            .setBufferSizeInBytes(maxOf(minimo * 4, 24_000 * 2))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
             .also { it.play() }
     }
 
-    /** Marca de tempo do último trecho de voz recebido — serve para saber
-     *  onde uma fala termina e outra começa (silêncio > 1,2 s). */
-    @Volatile private var ultimoAudioMs = 0L
+    /** Fim previsto do som já escrito no alto-falante (só a thread de voz
+     *  mexe). É por ele que se sabe onde uma fala termina e outra começa
+     *  (silêncio > 1,2 s DEPOIS de o som acabar, não depois do último write). */
+    @Volatile private var fimDoSomMs = 0L
     private var trechosDaFala = 0
 
     /** FILA + THREAD PRÓPRIA para a voz. O write do AudioTrack é bloqueante
@@ -145,17 +151,34 @@ class PonteGemini(
      *  segurava a leitura do WebSocket por segundos — e uma rota A2DP lenta
      *  virava atraso e perda de mensagens. Agora o socket só enfileira. */
     private val filaVoz = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+    /** Som na fila, em bytes (PCM16 24 kHz): o teto da fila é em segundos. */
+    private val bytesNaFila = java.util.concurrent.atomic.AtomicLong(0)
     @Volatile private var threadVoz: Thread? = null
     private fun garantirThreadVoz() {
         if (threadVoz?.isAlive == true) return
         threadVoz = Thread({
             while (!encerrado) {
                 val pcm = filaVoz.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
+                bytesNaFila.addAndGet(-pcm.size.toLong())
+                val agora = System.currentTimeMillis()
+                // FALA NOVA = o som anterior já terminou de sair há mais de
+                // 1,2 s. Antes media-se pelo último write, e com buffer maior
+                // um write pode acontecer com 1 s de som ainda por tocar: a
+                // saída seria recriada no meio da frase — cortando-a.
+                val novaFala = agora - fimDoSomMs > 1_200L
+                if (novaFala) {
+                    // Pré-carga: espera um instante para juntar mais trechos
+                    // antes do primeiro write, para a frase não começar com
+                    // o buffer no osso e picotar se a rede soluçar.
+                    var esperou = 0
+                    while (filaVoz.size < 2 && esperou < 300 && !encerrado) { Thread.sleep(50); esperou += 50 }
+                }
                 // Estica a janela pela duração DESTE trecho, aqui, na hora de
                 // tocar: é o único ponto em que "está falando" é verdade.
                 val duracaoMs = (pcm.size / 2L) * 1000L / 24_000L
                 falandoAteMs = maxOf(falandoAteMs, System.currentTimeMillis()) + duracaoMs
-                runCatching { tocar(pcm) }.onFailure {
+                fimDoSomMs = falandoAteMs
+                runCatching { tocar(pcm, novaFala) }.onFailure {
                     Log.w(TAG, "voz: falha ao tocar", it)
                     falandoAteMs = 0 // não segurar o microfone por áudio que não saiu
                 }
@@ -187,11 +210,7 @@ class PonteGemini(
      *      alto-falante. Não há erro nenhum para detectar. → a cada NOVA fala
      *      (silêncio de mais de 1,2 s, quando o áudio anterior já escoou por
      *      completo) a saída é recriada do zero, garantindo rota nova. */
-    private fun tocar(pcm: ByteArray) {
-        val agora = System.currentTimeMillis()
-        val novaFala = agora - ultimoAudioMs > 1_200L
-        ultimoAudioMs = agora
-
+    private fun tocar(pcm: ByteArray, novaFala: Boolean) {
         if (novaFala) {
             // Seguro: o intervalo garante que a fala anterior já terminou de
             // sair, então nada é cortado ao trocar de track.
@@ -306,9 +325,15 @@ class PonteGemini(
                     falandoAteMs = maxOf(falandoAteMs, agora + 300L)
                     // Fila entupida = reprodução emperrada. Zera tudo: melhor
                     // perder a fala do que tocar picado e segurar o microfone.
-                    if (filaVoz.size > 400) {
-                        Log.w(TAG, "voz: fila entupida (${filaVoz.size} trechos) — descartando")
-                        filaVoz.clear(); falandoAteMs = 0
+                    // Medida em SEGUNDOS DE SOM, não em trechos (15/09/2026): o
+                    // Gemini entrega a fala inteira em segundos, em trechos
+                    // pequenos, e um resumo de abertura longo passava de 400
+                    // trechos com a reprodução andando normalmente — a fila
+                    // era zerada e a voz cortava no meio da frase.
+                    bytesNaFila.addAndGet(pcm.size.toLong())
+                    if (bytesNaFila.get() > 24_000L * 2 * 180) {
+                        Log.w(TAG, "voz: fila com mais de 3 min de som (${filaVoz.size} trechos) — descartando")
+                        filaVoz.clear(); bytesNaFila.set(0); falandoAteMs = 0
                     }
                     filaVoz.offer(pcm)
                     garantirThreadVoz()
@@ -382,6 +407,18 @@ class PonteGemini(
         }
     }
 
+    /** ENCERRAMENTO EM CURSO. Entre o "finalizar" confirmado e o laudo pronto
+     *  passam-se até minutos, e nesse intervalo a IA seguia ouvindo e
+     *  respondendo a quem falasse perto dos óculos (campo 15/09/2026). Com isto
+     *  ligado o app para de mandar o microfone e a ponte descarta o que ainda
+     *  chegar e recusa funções — só a confirmação final do finalizar passa.
+     *  `false` desliga (o finalizar falhou e a perícia continua). */
+    @Volatile private var encerrando = false
+    fun definirEncerrando(ativo: Boolean) {
+        encerrando = ativo
+        runCatching { ws?.send(JSONObject().put("tipo", "encerrando").put("ativo", ativo).toString()) }
+    }
+
     /** Troca de modo pelo TOQUE (botões do cartão) — reserva; o perito de
      *  luvas troca pela voz. */
     fun definirModo(novo: String) {
@@ -398,6 +435,7 @@ class PonteGemini(
      *  alto-falante e libera o microfone na hora. */
     fun pararFala() {
         filaVoz.clear()
+        bytesNaFila.set(0)
         falandoAteMs = 0
         runCatching { track?.pause(); track?.flush() }
     }
@@ -407,7 +445,7 @@ class PonteGemini(
     fun enviarPcm(pcm: ByteArray) {
         // Em PAUSA o áudio continua indo: é o Gemini quem transcreve, e sem
         // isso ninguém ouviria a palavra de volta. A ponte descarta o resto.
-        if (!pronto || estaFalando()) return
+        if (!pronto || encerrando || estaFalando()) return
         val quadro = ByteArray(pcm.size + 1)
         quadro[0] = 0x01
         System.arraycopy(pcm, 0, quadro, 1, pcm.size)

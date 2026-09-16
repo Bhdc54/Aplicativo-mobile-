@@ -1114,6 +1114,10 @@ fun CaptureScreen() {
         // o encerramento?" de novo, logo depois de o perito ter confirmado.
         pedidoFinalizarMs = System.currentTimeMillis()
         finalizando = true
+        // A partir daqui a IA não ouve mais ninguém: o encerramento leva
+        // minutos e ela respondia a quem falasse perto dos óculos. Só a
+        // confirmação final ("sessão encerrada") ainda sai pela voz dela.
+        ponteGemini?.definirEncerrando(true)
         escopo.launch {
             // So devolve o `ocupado` se foi ESTE encerramento que o tomou —
             // senao liberaria a trava de outra operacao em curso.
@@ -1230,6 +1234,7 @@ fun CaptureScreen() {
             } catch (e: Exception) {
                 // A pericia CONTINUA ABERTA. Libera a retentativa imediata
                 // (sem o rito de dois tempos de novo) e avisa por voz.
+                ponteGemini?.definirEncerrando(false) // a IA volta a ouvir
                 pedidoFinalizarMs = System.currentTimeMillis()
                 val motivo = e.message ?: "erro desconhecido"
                 status = "Erro ao finalizar: $motivo"
@@ -1390,6 +1395,16 @@ fun CaptureScreen() {
                                 wifiEnviadaNestaConexao = true
                                 status = "Enviando a Wi-Fi salva (${wifiSsid.trim()}) aos óculos..."
                                 (device as? MentraGlassesDevice)?.configurarWifi(wifiSsid.trim(), wifiSenha)
+                                // SEGUNDA CHANCE (15/09/2026). O primeiro envio se
+                                // perdia às vezes (óculos ainda acordando, SDK sem
+                                // resposta) e ninguém tentava de novo: a tela
+                                // ficava em "pendente" até o perito tocar no
+                                // botão. Passados 40 s sem Wi-Fi, reenvia sozinho.
+                                delay(40_000)
+                                if (conectado && !wifiOculos && wifiSsid.isNotBlank()) {
+                                    status = "Óculos ainda sem Wi-Fi — reenviando a rede salva (${wifiSsid.trim()})..."
+                                    (device as? MentraGlassesDevice)?.configurarWifi(wifiSsid.trim(), wifiSenha)
+                                }
                             }
                         }
                     }
