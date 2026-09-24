@@ -4,10 +4,7 @@ import br.com.facilmova.peritavision.domain.TipoEvidencia
 import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
 
-/**
- * Abstracao do "oculos".
- * A UI e o dominio NUNCA falam com CameraX ou com o Mentra SDK diretamente —
- */
+/** Abstracao do "oculos". */
 interface GlassesDevice {
 
     /** Fluxo de eventos assincronos emitidos pelo dispositivo. */
@@ -32,39 +29,21 @@ interface GlassesDevice {
     fun encerrar()
 }
 
-/**
- * Eventos do dispositivo. O arquivo chega "cru"; quem sela a custodia
- * (SHA-256 + GPS + log) e a camada de dominio, fora do device.
- */
+/** Eventos do dispositivo. */
 sealed interface GlassesEvent {
     /** Um arquivo de evidencia acabou de ser gravado no destino (custodia local). */
     data class ArquivoCapturado(val tipo: TipoEvidencia, val arquivo: File) : GlassesEvent
 
-    /**
-     * Captura enviada por Wi-Fi DIRETO ao backend (modelo do Mentra Live via
-     * requestPhoto → webhook). Nao ha File local no telefone: a custodia
-     */
+    /** Captura enviada por Wi-Fi DIRETO ao backend (modelo do Mentra Live via requestPhoto → webhook). */
     data class CapturaRemota(
         val tipo: TipoEvidencia,
         val requestId: String,
         val uploadUrl: String?,
-        /** false = não é foto: é uma MARCA no vídeo, e o quadro só vira imagem
-         *  se o servidor conseguir recortá-lo no fim. A tela e a voz têm que
-         *  dizer isso ao perito — dizer "foto capturada" para uma marca fez o
-         *  perito sair da bancada achando que tinha duas fotos e o laudo sair
-         *  com zero (campo 08/09/2026). */
+        /** false = não é foto: é uma MARCA no vídeo, e o quadro só vira imagem se o servidor conseguir recortá-lo no fim. */
         val fotoDeVerdade: Boolean = true,
     ) : GlassesEvent
 
-    /**
-     * Os óculos RECUSARAM a foto na hora — "Camera busy with streaming": o
-     * Mentra Live não fotografa enquanto transmite vídeo. Esperar arquivo não
-     * adianta, e foi esperando que a perícia de 09/09/2026 acabou com zero
-     * foto. Quem tem a imagem neste instante é o tablet, que recebe o vídeo:
-     * ele recorta o quadro do visor e sobe como a captura desta autorização.
-     * `webhookUrl`/`authToken` são os da autorização, para o tablet conseguir
-     * subir mesmo quando a foto ia direto ao servidor.
-     */
+    /** Os óculos RECUSARAM a foto na hora — "Camera busy with streaming": o Mentra Live não fotografa enquanto transmite vídeo. */
     data class FotoRecusada(
         val requestId: String,
         val motivo: String,
@@ -78,24 +57,15 @@ sealed interface GlassesEvent {
     /** Estado da conexao com os oculos mudou (usado pelo Mentra Live por BLE). */
     data class Conexao(val conectado: Boolean) : GlassesEvent
 
-    /**
-     * Estado do Wi-Fi DOS OCULOS. O Bluetooth so manda o comando; quem sobe o
-     * JPEG para o backend e o proprio oculos, pela rede Wi-Fi dele. Sem Wi-Fi
-     */
+    /** Estado do Wi-Fi DOS OCULOS. */
     data class Wifi(val conectado: Boolean, val ssid: String?) : GlassesEvent
 
     /** Falha em alguma operacao de captura. A tela mostra como "Erro: ...". */
     data class Erro(val mensagem: String) : GlassesEvent
 
-    /**
-     * Mensagem informativa (nao e falha): "óculos ouvindo", "enviando Wi-Fi"...
-     * Separado de [Erro] para a tela nao rotular aviso normal como erro.
-     */
+    /** Mensagem informativa (nao e falha): "óculos ouvindo", "enviando Wi-Fi"... */
     data class Aviso(val mensagem: String) : GlassesEvent
 
-    /**
-     * O microfone dos oculos funciona, mas a transcricao local nao devolveu
-     * nada. A tela usa isso para cair automaticamente no reconhecimento de voz
-     */
+    /** O microfone dos oculos funciona, mas a transcricao local nao devolveu nada. */
     data object TranscricaoIndisponivel : GlassesEvent
 }

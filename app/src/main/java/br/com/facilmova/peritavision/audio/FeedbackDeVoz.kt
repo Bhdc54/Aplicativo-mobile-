@@ -10,10 +10,6 @@ import android.util.Log
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * Confirmação FALADA de que algo aconteceu ("Foto capturada", "Evidência
- * selada"...) — o feedback sonoro que o MVP descreve, para o perito confirmar
- */
 class FeedbackDeVoz(context: Context) {
     private val audioManager =
         context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -96,10 +92,7 @@ class FeedbackDeVoz(context: Context) {
         }
     }
 
-    /**
-     * Tenta pt-BR; se faltar o pacote, cai para o idioma padrão do aparelho;
-     * se esse também faltar, cai para inglês. Sempre deixa ALGO configurado
-     */
+    /** Tenta pt-BR; se faltar o pacote, cai para o idioma padrão do aparelho; se esse também faltar, cai para inglês. */
     private fun escolherIdiomaDisponivel(m: TextToSpeech): Locale? {
         val candidatos = listOf(Locale("pt", "BR"), Locale.getDefault(), Locale.US)
         for (loc in candidatos) {

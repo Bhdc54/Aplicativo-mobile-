@@ -3,10 +3,7 @@ package br.com.facilmova.peritavision.domain
 import java.io.File
 import java.security.MessageDigest
 
-/**
- * Geracao de hash da evidencia. O SHA-256 e calculado NO CELULAR, logo apos
- * receber o arquivo — nunca nos oculos (RF-08 do FIELD spec). Por isso vive na
- */
+/** Geracao de hash da evidencia. */
 object Hashing {
 
     /** SHA-256 de um arquivo, lido em blocos para nao carregar tudo na memoria. */

@@ -6,10 +6,7 @@ import androidx.camera.core.ImageCaptureException
 import androidx.core.content.ContextCompat
 import java.io.File
 
-/**
- * Captura de foto via CameraX. Detalhe interno do PhoneGlassesDevice — nao
- * expoe tipos do CameraX para o dominio, apenas o [ImageCapture] use case para
- */
+/** Captura de foto via CameraX. */
 class PhotoCaptureManager {
 
     /** Use case que o device liga a camera junto com o preview. */
@@ -17,10 +14,7 @@ class PhotoCaptureManager {
         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
         .build()
 
-    /**
-     * Tira a foto e salva no [destino]. Chama [onSalvo] com o arquivo final
-     * (a custodia — hash/GPS/log — acontece depois, fora daqui).
-     */
+    /** Tira a foto e salva no [destino]. */
     fun capturar(
         context: Context,
         destino: File,

@@ -1,20 +1,3 @@
-// A CUSTÓDIA DAS FOTOS NO TABLET (08/09/2026) — passo 2 da separação.
-//
-// Esta classe saiu de dentro do CaptureScreen, onde vivia como sete variáveis
-// de estado, três funções locais e a decisão de por onde mandar a foto,
-// espalhadas por mil linhas de uma função de composição. Os dois erros de
-// compilação e o pior bug de campo do dia nasceram dessa mistura, e nada dela
-// podia ser testado: qualquer verificação exigia um tablet, óculos e uma
-// perícia aberta.
-//
-// Aqui não há Compose, não há Android e não há rede: só arquivo, estado e
-// decisão. É stdlib e java.* puro, de propósito — assim compila e roda fora do
-// aparelho, e as regras que decidem se uma evidência entra ou não no laudo
-// passaram a ter teste (_to_delete/teste/CustodiaDeFotosTeste.kt).
-//
-// Quem faz IO de rede continua fora: a tela chama `tomarParaEnvio`, sobe o
-// arquivo pelo BackendClient e volta com `confirmarEnvio` ou `devolver`. A
-// custódia nunca conversa com o servidor; ela só sabe o que já foi aceito.
 package br.com.facilmova.peritavision.custodia
 
 import java.io.File
@@ -62,19 +45,9 @@ class CustodiaDeFotos(val pasta: File) {
         aoMudar?.invoke(novo)
     }
 
-    // ------------------------------------------------------------------------
     // Credenciais: memória E disco
-    // ------------------------------------------------------------------------
 
-    /**
-     * Guarda a credencial na memória e AO LADO do JPEG que vai chegar.
-     *
-     * Só em memória, ela morria com o processo: o arquivo ficava na pasta e não
-     * havia mais ninguém no mundo capaz de repassá-lo ao servidor, porque o
-     * token de uso único tinha ido embora. O formato é chave=valor, uma por
-     * linha, e não JSON — quatro campos não justificam uma dependência, e este
-     * arquivo precisa continuar sendo stdlib puro para poder ser testado.
-     */
+    /** Guarda a credencial na memória e AO LADO do JPEG que vai chegar. */
     fun guardar(c: Credencial) {
         credenciais[c.requestId] = c
         runCatching {
@@ -89,12 +62,7 @@ class CustodiaDeFotos(val pasta: File) {
         }
     }
 
-    /**
-     * A credencial de uma captura: da memória, senão do arquivo ao lado do
-     * JPEG. `daSessao` não é enfeite — sem ele, a foto que ficou da perícia
-     * anterior era repassada durante a perícia seguinte e entrava no contador
-     * dela.
-     */
+    /** A credencial de uma captura: da memória, senão do arquivo ao lado do JPEG. */
     fun credencial(requestId: String, daSessao: String?): Credencial? {
         val naMemoria = credenciais[requestId]
         if (naMemoria != null) {
@@ -118,34 +86,28 @@ class CustodiaDeFotos(val pasta: File) {
         return c
     }
 
-    fun arquivoDeCredencial(requestId: String): File = File(pasta, "$requestId.cred")
+    fun arquivoDeCredencial(requestId: String): File = File(pasta, "${nomeSeguro(requestId)}.cred")
+
+    // requestId vira nome de arquivo: só caracteres seguros (sem "/" nem "..").
+    private fun nomeSeguro(id: String) = id.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('.')
 
     private fun umaLinha(v: String) = v.replace('\n', ' ').replace('\r', ' ')
 
-    // ------------------------------------------------------------------------
     // Arquivos da foto
-    // ------------------------------------------------------------------------
 
     /** Já existe foto (pendente ou já enviada) para esta captura? */
     fun jaTemFoto(requestId: String): Boolean =
         EXTENSOES.any { e ->
-            File(pasta, "$requestId.$e").exists() || File(pasta, "$requestId.$e$SUFIXO_ENVIADA").exists()
+            File(pasta, "${nomeSeguro(requestId)}.$e").exists() || File(pasta, "${nomeSeguro(requestId)}.$e$SUFIXO_ENVIADA").exists()
         }
 
-    /**
-     * Grava a foto e devolve o arquivo, ou null se não deu.
-     *
-     * Escreve em `.parcial` e só então renomeia: se o processo morrer ou o
-     * disco encher no meio, o que sobra é um `.parcial`, que `pendentes()`
-     * ignora — nunca um JPEG cortado selado como prova.
-     */
     fun gravarFoto(requestId: String, bytes: ByteArray, mime: String): File? {
         val extensao = if (mime.contains("png", true)) "png" else "jpg"
-        val destino = File(pasta, "$requestId.$extensao")
+        val destino = File(pasta, "${nomeSeguro(requestId)}.$extensao")
         if (jaTemFoto(requestId)) return null
         return runCatching {
             pasta.mkdirs()
-            val temporario = File(pasta, "$requestId.parcial")
+            val temporario = File(pasta, "${nomeSeguro(requestId)}.parcial")
             temporario.outputStream().use { it.write(bytes) }
             if (!temporario.renameTo(destino)) {
                 temporario.delete()
@@ -157,10 +119,7 @@ class CustodiaDeFotos(val pasta: File) {
         }.getOrNull()
     }
 
-    /**
-     * Fotos COMPLETAS ainda não aceitas pelo servidor. Só `.jpg`/`.png`: o
-     * `.parcial` fica de fora, e o `.cred` também.
-     */
+    /** Fotos COMPLETAS ainda não aceitas pelo servidor. */
     fun pendentes(): List<File> =
         pasta.listFiles { f ->
             f.isFile && EXTENSOES.any { f.name.endsWith(".$it") }
@@ -187,9 +146,7 @@ class CustodiaDeFotos(val pasta: File) {
         recontarParadas()
     }
 
-    // ------------------------------------------------------------------------
     // Repasse: uma captura de cada vez
-    // ------------------------------------------------------------------------
 
     /** Reserva a captura para o repasse. false = já tem um envio em voo. */
     fun tomarParaEnvio(requestId: String): Boolean {
@@ -204,16 +161,7 @@ class CustodiaDeFotos(val pasta: File) {
         mudar { it.copy(aguardandoRede = emEnvio.size, paradasNoTablet = pendentes().size) }
     }
 
-    /**
-     * O servidor ACEITOU a foto. Marca o arquivo, apaga a credencial (o token
-     * era de uso único e já foi gasto), conta, e desfaz a marca no vídeo caso
-     * o relógio já tivesse desistido desta captura — chegou foto de verdade,
-     * então a marca deixa de existir.
-     *
-     * Devolve false quando não conseguiu marcar o arquivo como enviado — a
-     * foto está no servidor, mas o arquivo continuaria pendente e seria
-     * oferecido de novo, então quem chama tem de registrar isso no log.
-     */
+    /** O servidor ACEITOU a foto. */
     fun confirmarEnvio(requestId: String, arquivo: File): Boolean {
         emEnvio.remove(requestId)
         credenciais.remove(requestId)
@@ -235,23 +183,9 @@ class CustodiaDeFotos(val pasta: File) {
         return renomeou
     }
 
-    // ------------------------------------------------------------------------
     // A decisão: tablet ou webhook público
-    // ------------------------------------------------------------------------
 
-    /**
-     * A foto não chegou no prazo. Devolve true se esta captura virou MARCA no
-     * vídeo agora (para o contador da tela subir uma vez só).
-     *
-     * `houveConexaoNaPorta` é a prova que separa dois problemas diferentes: se
-     * ninguém abriu conexão, os óculos não tentaram, e o defeito é endereço ou
-     * rede — insistir só perderia as fotos seguintes também, então o caminho
-     * volta a ser o webhook público, que já funcionava. Se houve conexão, o
-     * endereço está certo e o problema é o envio; aí vale continuar.
-     *
-     * A credencial NÃO é apagada: os óculos ainda podem entregar a foto
-     * atrasada, e quando isso acontece o `confirmarEnvio` desfaz a marca.
-     */
+    /** A foto não chegou no prazo. */
     fun desistirDaFoto(requestId: String, houveConexaoNaPorta: Boolean): Boolean {
         val marcouAgora = marcadas.add(requestId)
         mudar {
@@ -275,12 +209,7 @@ class CustodiaDeFotos(val pasta: File) {
         mudar { it.copy(paradasNoTablet = pendentes().size) }
     }
 
-    /**
-     * Fim de sessão: zera o que é da perícia e ESQUECE as credenciais em
-     * memória. As de disco ficam — se sobrou foto no tablet, ela ainda precisa
-     * poder subir depois, e é a sessão gravada no arquivo que impede que ela
-     * seja contada na perícia seguinte.
-     */
+    /** Fim de sessão: zera o que é da perícia e ESQUECE as credenciais em memória. */
     fun encerrarSessao() {
         credenciais.clear()
         marcadas.clear()

@@ -6,10 +6,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-/*
- * TIPOGRAFIA — Roboto (fonte do sistema), escala completa.
- * Antes só bodyLarge estava definido; todo o resto vinha do padrão e os tamanhos
- */
+/** TIPOGRAFIA — Roboto (fonte do sistema), escala completa. */
 
 private fun estilo(
     tamanho: Double,

@@ -1,13 +1,3 @@
-// Cartões da CAPTURA de evidência: o botão, a galeria de fotos da
-// perícia, a foto em tela cheia e a lista de evidências seladas.
-//
-// Saíram do MainActivity.kt em 08/09/2026, quando ele passou de 3.100
-// linhas. Ficam no MESMO pacote e na mesma pasta de propósito: assim a
-// separação não exigiu mexer em import nenhum do projeto, e o risco de
-// uma mudança grande e não compilada aqui ficou perto de zero.
-//
-// `internal` e não `private` porque em Kotlin `private` vale só dentro do
-// arquivo, e quem chama estes cartões é o CaptureScreen, que ficou lá.
 package br.com.facilmova.peritavision
 
 import android.Manifest
@@ -128,9 +118,6 @@ internal fun CartaoCaptura(
     rotaDaFoto: String? = null,
     vozAtiva: Boolean,
     ouvindoPelosOculos: Boolean,
-    /** true quando o assistente IA está ligado: é ELE quem recebe os pedidos
-     *  do perito ("registra uma foto disso", "pode encerrar"), então some da
-     *  tela o reconhecedor de palavras soltas, que só existe como reserva. */
     assistenteIa: Boolean,
     gravandoAudio: Boolean,
     previewCamera: (@Composable () -> Unit)?,
@@ -214,8 +201,6 @@ internal fun CartaoCaptura(
 
         Spacer(Modifier.height(9.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            // O botão de palavras soltas só aparece SEM assistente e enquanto a
-            // voz está parada: ligada, o "Parar voz" mora no aviso vermelho acima.
             if (!assistenteIa && !vozAtiva) {
                 BotaoContorno(
                     texto = "Comando de voz",
@@ -266,27 +251,17 @@ internal fun miniaturaDe(bytes: ByteArray, alvoPx: Int = 480): android.graphics.
     android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, medir)
     var escala = 1
     val maior = maxOf(medir.outWidth, medir.outHeight)
-    // maior <= 0 = decode de medição falhou; alvoPx <= 0 nunca acontece, mas o
-    // laço não pode depender disso para terminar.
+    // maior <= 0 = decode de medição falhou; alvoPx <= 0 nunca acontece, mas o laço não pode depender disso para terminar.
     if (maior > 0 && alvoPx > 0) while (maior / (escala * 2) >= alvoPx) escala *= 2
     val opcoes = android.graphics.BitmapFactory.Options().apply {
         inSampleSize = escala
         // JPEG não tem canal alfa: RGB_565 gasta metade da memória de ARGB_8888.
-        // Numa perícia com 40 capturas isso é a diferença entre 20 MB e 45 MB
-        // de bitmaps vivos ao lado do receptor de vídeo.
         inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
     }
     return runCatching { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opcoes) }.getOrNull()
 }
 
-/**
- * FOTOS DA PERÍCIA — miniaturas do que o SERVIDOR já recebeu, embaixo do vídeo.
- *
- * Pedido de campo (08/09/2026): a foto sai dos óculos direto para o servidor e
- * o perito nunca a via na bancada. Quando saía escura, tremida ou fora de
- * enquadramento, ele só descobria no painel, horas depois, com o vestígio já
- * lacrado de volta. Aqui ele vê e refaz na hora.
- */
+/** FOTOS DA PERÍCIA — miniaturas do que o SERVIDOR já recebeu, embaixo do vídeo. */
 @Composable
 internal fun CartaoFotosDaPericia(
     fotos: List<FotoNaTela>,

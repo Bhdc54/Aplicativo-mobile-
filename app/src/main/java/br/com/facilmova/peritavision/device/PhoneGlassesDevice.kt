@@ -16,10 +16,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
 
-/**
- * Implementacao de [GlassesDevice] usando a camera e o microfone do CELULAR.
- * E a "muleta de teste" enquanto o Mentra Live nao chega: a camera do phone
- */
+/** Implementacao de [GlassesDevice] usando a camera e o microfone do CELULAR. */
 class PhoneGlassesDevice(
     private val context: Context,
     private val destino: File
@@ -34,10 +31,7 @@ class PhoneGlassesDevice(
 
     private var cameraProvider: ProcessCameraProvider? = null
 
-    /**
-     * Vincula a camera do celular ao [previewView] e ao ciclo de vida.
-     * Metodo especifico do phone (nao esta na interface): o preview e uma
-     */
+    /** Vincula a camera do celular ao [previewView] e ao ciclo de vida. */
     fun vincularCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({

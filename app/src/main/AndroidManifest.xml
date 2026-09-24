@@ -24,6 +24,12 @@
     <!-- Rede: falar com o backend PeritaVision (API B) na rede local. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Ler a rede Wi-Fi ATUAL DO TABLET (nome e frequencia) para oferece-la
+         pronta no provisionamento dos oculos e avisar quando ela e 5 GHz -
+         banda que os oculos nao enxergam. Permissao normal: nao pergunta nada
+         ao usuario. Sem a de localizacao o Android esconde o NOME da rede,
+         mas a frequencia continua vindo, que e o aviso que importa. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
@@ -45,7 +51,7 @@
     </queries>
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"

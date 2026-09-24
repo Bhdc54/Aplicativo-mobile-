@@ -1,27 +1,4 @@
 // Receptor RTMP do PeritaVision — roda NO TABLET.
-//
-// Os óculos Mentra publicam o vídeo por RTMP para uma URL que o app manda por
-// BLE. Até aqui essa URL era a VPS: o vídeo atravessava a internet e o tablet
-// puxava de volta para mostrar. Este arquivo faz o tablet ser o destino: os
-// óculos publicam em rtmp://<ip-do-tablet>:1935/pv/<sessão> pela Wi-Fi da
-// bancada, e o tablet grava o que chega em segmentos .flv — sem recodificar,
-// sem depender da internet — e entrega cada quadro de vídeo por callback para
-// o preview local e para a IA enxergar.
-//
-// Sem dependência: é só socket e bytes. O RTMP é um protocolo de 2009 com
-// três partes — handshake, chunks e comandos AMF0 — e os pacotes de áudio e
-// vídeo já vêm no formato das tags FLV, então gravar é reescrever cabeçalho.
-// Por que não uma biblioteca: não existe servidor RTMP pronto para Android; o
-// ffmpeg-kit foi aposentado em 2025; e isto vai rodar num sistema da polícia,
-// onde cada dependência é um risco a mais para auditar.
-//
-// Compatível com o handshake SIMPLES (S1 com versão zerada). É o que o cliente
-// dos óculos usa, e o que faz o ffmpeg tomar o caminho sem digest — sem isso
-// o ffmpeg tenta validar assinatura e falha.
-//
-// Validado em 05/09/2026 com o ffmpeg no papel dos óculos: 720p30 a 3 Mbps e
-// 1080p30 a 6 Mbps sem perder quadro; kill -9 do publicador fecha o segmento
-// íntegro; publicar de novo abre outro segmento.
 package br.com.facilmova.peritavision.rtmp
 
 import java.io.BufferedInputStream
@@ -64,9 +41,7 @@ class RtmpIngest(
             val cabecalhoDeSequencia: Boolean,
         ) : Evento
 
-        /** O segmento fechou (cliente desconectou, deleteStream, ou ficou mudo).
-         *  `continua` = foi ROTAÇÃO: o arquivo fechou para subir ao servidor e a
-         *  publicação segue num arquivo novo, sem interrupção. */
+        /** O segmento fechou (cliente desconectou, deleteStream, ou ficou mudo). */
         data class Encerrado(
             val chave: String,
             val arquivo: File,
@@ -77,9 +52,7 @@ class RtmpIngest(
             val continua: Boolean = false,
         ) : Evento
 
-        /** Alguém abriu TCP na porta, antes de qualquer handshake. No teste de
-         *  campo é o que separa "a Wi-Fi não deixa os óculos chegarem ao
-         *  tablet" (nada acontece) de "chegaram e o handshake falhou". */
+        /** Alguém abriu TCP na porta, antes de qualquer handshake. */
         data class Conectou(val de: String) : Evento
 
         data class Erro(val mensagem: String) : Evento
@@ -116,9 +89,7 @@ class RtmpIngest(
 
     override fun close() = encerrar()
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Uma conexão = um publicador (os óculos). Estado do parser de chunks e a
-    // gravação do segmento vivem aqui.
+    // Uma conexão = um publicador (os óculos).
     private inner class Conexao(private val socket: Socket) {
         private val entrada: DataInputStream
         private val saida: OutputStream
@@ -140,15 +111,6 @@ class RtmpIngest(
         private var gravador: GravadorFlv? = null
         private var quadros = 0
         private var ultimoTimestamp = 0
-        // ROTAÇÃO DE SEGMENTOS (10/09/2026). Antes, uma perícia era UM .flv,
-        // fechado só no fim: 16 min a 5 Mbps deram 600 MB para subir depois
-        // do "Finalizar", o app esperou os 3 min do teto e a perícia saiu sem
-        // vídeo. Agora o arquivo fecha a cada LIMITE_SEGMENTO_BYTES ou
-        // LIMITE_SEGMENTO_MS, sempre num keyframe, e sobe enquanto a gravação
-        // continua no arquivo seguinte — no fim sobra só o último pedaço.
-        // Cada segmento é um FLV completo (metadados + cabeçalhos de sequência
-        // AVC/AAC + timestamps a partir de zero), para o ffmpeg do servidor
-        // concatenar como já concatena.
         private var metadados: ByteArray? = null
         private var sequenciaVideo: ByteArray? = null
         private var sequenciaAudio: ByteArray? = null
@@ -191,7 +153,6 @@ class RtmpIngest(
             try { socket.close() } catch (_: IOException) {}
         }
 
-        // ── Handshake simples ─────────────────────────────────────────────
         private fun handshake() {
             val c0 = entrada.readUnsignedByte()
             if (c0 != 3) throw IOException("versão RTMP inesperada: $c0")
@@ -208,7 +169,6 @@ class RtmpIngest(
             val c2 = ByteArray(1536); entrada.readFully(c2)
         }
 
-        // ── Chunks ────────────────────────────────────────────────────────
         private inner class EstadoFluxo {
             var timestamp = 0
             var delta = 0
@@ -247,9 +207,7 @@ class RtmpIngest(
                     if (f.corpo == null) f.timestamp += f.delta
                 }
                 3 -> {
-                    // Continuação. Se o chunk anterior deste fluxo tinha timestamp
-                    // estendido, ele vem repetido aqui (regra da especificação que
-                    // quase todo cliente segue).
+                    // Continuação.
                     if (f.estendido) { conta(4); entrada.readInt() }
                     if (f.corpo == null) f.timestamp += f.delta
                 }
@@ -304,7 +262,6 @@ class RtmpIngest(
             }
         }
 
-        // ── Comandos AMF0 ─────────────────────────────────────────────────
         private fun tratarComando(csid: Int, streamId: Int, corpo: ByteArray) {
             val valores = Amf0.decodificarTodos(corpo)
             val nome = valores.getOrNull(0) as? String ?: return
@@ -326,7 +283,8 @@ class RtmpIngest(
                     if (transacao != 0.0) enviarComando(3, 0, "_result", transacao, null, null)
                 "publish" -> {
                     val nomeStream = (valores.getOrNull(3) as? String ?: "").substringBefore('?')
-                    chave = nomeStream.ifBlank { "sem-chave" }
+                    // A chave vira nome de pasta: só caracteres seguros, sem "..".
+                    chave = nomeStream.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('.').ifBlank { "sem-chave" }
                     enviarMensagem(2, 4, 0, 0, byteArrayOf(0, 0) + u32(1))          // Stream Begin 1
                     enviarComando(5, 1, "onStatus", 0.0, null,
                         mapOf("level" to "status", "code" to "NetStream.Publish.Start",
@@ -354,14 +312,7 @@ class RtmpIngest(
             gravar(18, timestamp, dados)
         }
 
-        /**
-         * Tira `duration` e `filesize` do onMetaData. O ffmpeg acredita no
-         * duration dos metadados antes de medir os quadros: um segmento de 10 s
-         * carregando "duration=140" do stream inteiro fazia o ffprobe dizer 140 s
-         * e o concat do servidor abrir um buraco de 130 s entre os pedaços (visto
-         * no teste de 10/09/2026). Um encoder ao vivo em geral manda 0, mas não
-         * é garantia — melhor cada segmento medir a própria duração.
-         */
+        /** Tira `duration` e `filesize` do onMetaData. */
         private fun semDuracao(dados: ByteArray): ByteArray = try {
             val valores = Amf0.decodificarTodos(dados)
             val nome = valores.getOrNull(0) as? String
@@ -376,7 +327,6 @@ class RtmpIngest(
             }
         } catch (_: Exception) { dados }
 
-        // ── Gravação ──────────────────────────────────────────────────────
         private fun abrirSegmento() {
             gravador?.fechar()
             val pasta = File(pastaSaida, chave).apply { mkdirs() }
@@ -409,8 +359,7 @@ class RtmpIngest(
             val frameType = (dados[0].toInt() and 0xf0) ushr 4
             val codec = dados[0].toInt() and 0x0f
             if (codec == 7 && dados[1].toInt() == 0) sequenciaVideo = dados // AVCDecoderConfigurationRecord
-            // Só troca de arquivo num KEYFRAME: o segmento novo tem que abrir
-            // com um quadro que se decodifica sozinho.
+            // Só troca de arquivo num KEYFRAME: o segmento novo tem que abrir com um quadro que se decodifica sozinho.
             if (frameType == 1 && gravador != null && deveRotacionar()) rotacionar(timestamp)
             gravar(9, timestamp, dados)
         }
@@ -427,8 +376,6 @@ class RtmpIngest(
                 "rotação (${r.first / 1_000_000} MB)", continua = true))
             gravador = null
             abrirSegmento()
-            // O arquivo novo nasce completo: metadados e cabeçalhos de sequência
-            // no tempo zero, e o keyframe que motivou a troca vem logo atrás.
             baseTs = timestampDoKeyframe
             val novo = gravador ?: return
             metadados?.let { novo.tag(18, 0, it); bytesDoSegmento += 11L + it.size + 4 }
@@ -447,7 +394,6 @@ class RtmpIngest(
             if (frameType == 1) gravador?.sincronizar()
         }
 
-        // ── Envio ─────────────────────────────────────────────────────────
         private fun enviarComando(csid: Int, streamId: Int, nome: String, transacao: Double, vararg args: Any?) {
             val b = ByteArrayOutputStream()
             Amf0.codificar(b, nome); Amf0.codificar(b, transacao)
@@ -479,7 +425,6 @@ class RtmpIngest(
         private fun lerU32LE(): Int { val a = entrada.readUnsignedByte(); val b = entrada.readUnsignedByte(); val c = entrada.readUnsignedByte(); val d = entrada.readUnsignedByte(); return a or (b shl 8) or (c shl 16) or (d shl 24) }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
     /** Escreve um .flv: cabeçalho + tags com o payload exatamente como veio no RTMP. */
     private class GravadorFlv(val arquivo: File) {
         private val fos = FileOutputStream(arquivo)
@@ -526,7 +471,6 @@ class RtmpIngest(
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
 /** AMF0 — só os tipos que connect/createStream/publish/onMetaData usam. */
 object Amf0 {
     fun codificar(s: OutputStream, v: Any?) {

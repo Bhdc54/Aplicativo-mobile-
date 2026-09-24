@@ -1,23 +1,3 @@
-// O QUE OS ÓCULOS ESTÃO VENDO, NA TELA DO TABLET (08/09/2026).
-//
-// O cartão "Visão dos óculos" no modo tablet mostrava só números — quadros por
-// segundo, megabytes, número do segmento — porque o receptor RTMP entrega
-// H.264 cru e ninguém decodificava. Em campo o perito olhou para o retângulo
-// preto e disse o obvio: "o vídeo não aparece no tablet". Os quadros estavam
-// chegando; faltava mostrá-los.
-//
-// Aqui o H.264 do RtmpIngest vai para o MediaCodec do tablet, que desenha
-// direto numa Surface. Sem cópia de bitmap, sem conversão de cor em Kotlin: o
-// decodificador de hardware escreve na superfície e a tela mostra.
-//
-// O que a tag FLV entrega em `Evento.Quadro.dados`:
-//   byte 0      → frameType (4 bits) | codecId (4 bits); codecId 7 = AVC
-//   byte 1      → AVCPacketType: 0 = cabeçalho de sequência, 1 = NALU
-//   bytes 2..4  → composition time offset (não usamos)
-//   bytes 5..   → no cabeçalho: AVCDecoderConfigurationRecord (SPS/PPS)
-//                 no NALU: AVCC, cada NALU precedida do seu tamanho
-// O MediaCodec quer Annex-B (00 00 00 01 antes de cada NALU), então a
-// conversão acontece na entrega.
 package br.com.facilmova.peritavision.rtmp
 
 import android.media.MediaCodec
@@ -63,9 +43,7 @@ class DecodificadorDeVideo {
      *  intermediário primeiro produz o "vídeo derretido" clássico. */
     @Volatile private var esperandoKeyframe = true
 
-    // ------------------------------------------------------------------------
     // Superfície (vem do SurfaceView, na thread principal)
-    // ------------------------------------------------------------------------
 
     fun definirSuperficie(nova: Surface?) {
         synchronized(trava) {
@@ -78,9 +56,7 @@ class DecodificadorDeVideo {
         }
     }
 
-    // ------------------------------------------------------------------------
     // Entrada: cada quadro do RtmpIngest (thread de rede)
-    // ------------------------------------------------------------------------
 
     fun aceitar(ev: RtmpIngest.Evento.Quadro) {
         val d = ev.dados
@@ -92,9 +68,6 @@ class DecodificadorDeVideo {
             lerConfiguracao(d)
             return
         }
-        // Sem superfície (cartão fora da tela, tela apagada para luz forense)
-        // não há para quem desenhar: sair aqui evita converter e alocar um
-        // buffer por quadro à toa, trinta vezes por segundo, a perícia inteira.
         if (superficie == null) return
         val annexB = paraAnnexB(d) ?: return
         if (esperandoKeyframe) {
@@ -103,9 +76,7 @@ class DecodificadorDeVideo {
         }
         val pacote = Pacote(annexB, ev.timestampMs.toLong() * 1000L, ev.keyframe)
         if (!fila.offer(pacote)) {
-            // Fila cheia = o decodificador não está acompanhando (tela apagada,
-            // aparelho ocupado). Descarta o MAIS ANTIGO, não o novo: no vídeo ao
-            // vivo o quadro velho não interessa mais a ninguém.
+            // Fila cheia = o decodificador não está acompanhando (tela apagada, aparelho ocupado).
             fila.poll()
             descartar()
             if (!fila.offer(pacote)) descartar()
@@ -177,9 +148,7 @@ class DecodificadorDeVideo {
         return if (achou) saida.toByteArray() else null
     }
 
-    // ------------------------------------------------------------------------
     // MediaCodec
-    // ------------------------------------------------------------------------
 
     private fun iniciarCodec() {
         val s = superficie ?: return
@@ -187,8 +156,6 @@ class DecodificadorDeVideo {
         val umPps = pps ?: return
         try {
             val formato = MediaFormat.createVideoFormat(MIME, LARGURA_NOMINAL, ALTURA_NOMINAL)
-            // csd-0/csd-1 em Annex-B: o decodificador tira daí a resolução real
-            // e corrige o formato nominal acima no INFO_OUTPUT_FORMAT_CHANGED.
             formato.setByteBuffer("csd-0", ByteBuffer.wrap(PARTIDA + umSps))
             formato.setByteBuffer("csd-1", ByteBuffer.wrap(PARTIDA + umPps))
             val c = MediaCodec.createDecoderByType(MIME)
@@ -241,8 +208,7 @@ class DecodificadorDeVideo {
                             descartar()
                         }
                     } else {
-                        // Sem buffer de entrada livre: o quadro se perde, e é o
-                        // certo — segurar aqui atrasaria o vídeo ao vivo.
+                        // Sem buffer de entrada livre: o quadro se perde, e é o certo — segurar aqui atrasaria o vídeo ao vivo.
                         descartar()
                     }
                 }
@@ -267,8 +233,6 @@ class DecodificadorDeVideo {
             } catch (e: InterruptedException) {
                 return
             } catch (e: IllegalStateException) {
-                // Codec morreu (aparelho dormiu, superfície sumiu): reinicia na
-                // próxima configuração/keyframe em vez de ficar preto para sempre.
                 Log.w(TAG, "decodificador em estado inválido: ${e.message}")
                 publicar { it.copy(decodificando = false, erro = "decodificador reiniciando") }
                 synchronized(trava) {

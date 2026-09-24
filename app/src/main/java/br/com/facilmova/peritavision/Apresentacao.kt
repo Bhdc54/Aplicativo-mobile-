@@ -1,18 +1,5 @@
 package br.com.facilmova.peritavision
 
-/*
- * COMO AS COISAS APARECEM PARA O PERITO — 12/09/2026.
- *
- * A tela da bancada mostrava dado cru vindo do ATENA e da narração: data em
- * ISO ("2026-02-04T04:00:00.000+00:00"), objeto JSON inteiro no lugar de um
- * objetivo de exame ({"numeroProtocolo":"054466/2026"}) e falas de comando
- * como consideração do laudo ("Sim.", "Eu quero capturar.", "firm").
- * Nada disso é erro de tela: é dado que chega assim. Aqui fica a tradução
- * para o que o perito — e quem estiver assistindo a uma perícia — deve ler.
- */
-
-/** "2026-02-04T04:00:00.000+00:00" → "04/02/2026". O que não for data ISO
- *  volta como veio: campo de texto livre do ATENA continua legível. */
 fun dataLegivel(bruta: String?): String? {
     val t = bruta?.trim().orEmpty()
     if (t.isEmpty()) return null
@@ -35,13 +22,7 @@ private fun ehLixoDeDado(t: String): Boolean {
 fun paraTela(itens: List<String>): List<String> =
     itens.map { it.trim() }.filterNot { it.isEmpty() || ehLixoDeDado(it) }.distinct()
 
-/*
- * FALA DE COMANDO, não consideração do laudo. Mesma regra do servidor
- * (backend/src/domain/fala.ts): o que o perito diz PARA a IA — "captura",
- * "silêncio", "Sim.", "eu vou capturar aqui" — não descreve material nenhum
- * e não pode entrar no laudo como consideração. Uma frase descritiva de três
- * palavras ou mais passa; o perito revisa no painel de qualquer jeito.
- */
+/** FALA DE COMANDO, não consideração do laudo. */
 private val COMANDOS = Regex(
     """\b(captur\w*|capta\w*|foto\w*|fotograf\w*|registr\w*|finaliz\w*|encerr\w*|descart\w*|capture|photo)\b""",
     RegexOption.IGNORE_CASE,

@@ -3,10 +3,7 @@ package br.com.facilmova.peritavision.domain
 import java.io.File
 import java.util.UUID
 
-/**
- * Sela a cadeia de custodia de um arquivo recem-capturado.
- * Este e o pipeline DEVICE-AGNOSTICO: recebe um arquivo (do celular hoje, do
- */
+/** Sela a cadeia de custodia de um arquivo recem-capturado. */
 class SelarCustodia(
     private val cofre: CofreCustodia
 ) {

@@ -7,10 +7,6 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 
-/**
- * Leitor do codigo do lacre com a tela pronta do Google Play Services
- * (sem permissao de camera nem layout proprio): abre, le e devolve o texto cru.
- */
 object LeitorCodigo {
     fun ler(context: Context, onOk: (String) -> Unit, onErro: (String) -> Unit) {
         val opcoes = GmsBarcodeScannerOptions.Builder()

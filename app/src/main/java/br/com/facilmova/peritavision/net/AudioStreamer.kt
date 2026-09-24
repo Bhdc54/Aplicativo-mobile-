@@ -10,10 +10,7 @@ import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/**
- * Transmite o áudio DOS ÓCULOS ao backend PeritaVision e recebe os comandos
- * de voz reconhecidos.
- */
+/** Transmite o áudio DOS ÓCULOS ao backend PeritaVision e recebe os comandos de voz reconhecidos. */
 class AudioStreamer(
     private val baseUrl: String,
     private val token: String,
@@ -111,10 +108,7 @@ class AudioStreamer(
         }
     }
 
-    /**
-     * Amplitude simples (RMS) do frame PCM 16-bit. Não é VAD sofisticado, só
-     * o suficiente para distinguir "o perito está falando" de "silêncio
-     */
+    /** Amplitude simples (RMS) do frame PCM 16-bit. */
     private fun temFala(pcm: ByteArray): Boolean {
         if (pcm.size < 2) return false
         var soma = 0.0

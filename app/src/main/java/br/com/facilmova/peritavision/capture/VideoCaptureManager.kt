@@ -14,10 +14,7 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import java.io.File
 
-/**
- * Gravacao de video via CameraX. Travado em 720p (Quality.HD) de proposito:
- * e o teto real do Mentra Live (GAP-01 / RF-06). Assim o simulador ja se
- */
+/** Gravacao de video via CameraX. */
 class VideoCaptureManager {
 
     private val recorder: Recorder = Recorder.Builder()
@@ -31,10 +28,7 @@ class VideoCaptureManager {
 
     val gravando: Boolean get() = recording != null
 
-    /**
-     * Inicia a gravacao no [destino]. Ao finalizar, chama [onSalvo] com o
-     * arquivo; em falha, chama [onErro].
-     */
+    /** Inicia a gravacao no [destino]. */
     @SuppressLint("MissingPermission")
     fun iniciar(
         context: Context,

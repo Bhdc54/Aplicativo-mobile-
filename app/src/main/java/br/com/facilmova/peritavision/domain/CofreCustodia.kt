@@ -7,10 +7,7 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 
-/**
- * Cofre de custodia minima.
- * Responsabilidades:
- */
+/** Cofre de custodia minima. */
 class CofreCustodia(context: Context) {
 
     /** Destino pre-definido de todas as evidencias capturadas. */
@@ -20,10 +17,7 @@ class CofreCustodia(context: Context) {
     /** Log imutavel (append-only) da cadeia de custodia, em JSON Lines. */
     private val arquivoLog: File = File(diretorioEvidencias, "custodia.log.jsonl")
 
-    /**
-     * Sela uma evidencia na cadeia de custodia e devolve o hash do elo criado.
-     * O elo = SHA-256(hashAnterioR + payloadCanonico).
-     */
+    /** Sela uma evidencia na cadeia de custodia e devolve o hash do elo criado. */
     @Synchronized
     fun registrar(ev: Evidencia): String {
         val hashAnterior = ultimoHashDaCorrente()
@@ -62,8 +56,6 @@ class CofreCustodia(context: Context) {
     fun verificarIntegridade(): Boolean {
         if (!arquivoLog.exists()) return true
         var hashEsperado = HASH_GENESE
-        // Laco normal (readLines) para permitir o 'return' ao achar adulteracao —
-        // dentro de forEachLine o return nao-local nao e permitido.
         for (linha in arquivoLog.readLines()) {
             if (linha.isBlank()) continue
             val o = JSONObject(linha)

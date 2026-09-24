@@ -5,10 +5,7 @@ import android.media.MediaRecorder
 import android.os.Build
 import java.io.File
 
-/**
- * Gravacao de audio via MediaRecorder (independente da camera).
- * Salva em .m4a (MPEG-4 / AAC).
- */
+/** Gravacao de audio via MediaRecorder (independente da camera). */
 class AudioCaptureManager {
 
     private var recorder: MediaRecorder? = null
@@ -39,10 +36,6 @@ class AudioCaptureManager {
         return arquivo
     }
 
-    /**
-     * Encerra a gravacao e devolve o arquivo final, ou null se nada estava
-     * sendo gravado ou se a gravacao foi curta demais (MediaRecorder falha
-     */
     fun parar(): File? {
         val arquivo = arquivoAtual
         val r = recorder ?: return null

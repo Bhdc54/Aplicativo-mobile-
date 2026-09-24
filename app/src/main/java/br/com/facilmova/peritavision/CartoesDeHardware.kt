@@ -1,13 +1,4 @@
-// Cartões do HARDWARE da bancada: os óculos, a Wi-Fi deles, o servidor
-// de vídeo e o visor com a imagem ao vivo.
-//
-// Saíram do MainActivity.kt em 08/09/2026, quando ele passou de 3.100
-// linhas. Ficam no MESMO pacote e na mesma pasta de propósito: assim a
-// separação não exigiu mexer em import nenhum do projeto, e o risco de
-// uma mudança grande e não compilada aqui ficou perto de zero.
-//
-// `internal` e não `private` porque em Kotlin `private` vale só dentro do
-// arquivo, e quem chama estes cartões é o CaptureScreen, que ficou lá.
+// Cartões do HARDWARE da bancada: os óculos, a Wi-Fi deles, o servidor de vídeo e o visor com a imagem ao vivo.
 package br.com.facilmova.peritavision
 
 import android.Manifest
@@ -124,9 +115,7 @@ internal fun CartaoOculos(
     onConectar: () -> Unit,
 ) {
     if (!ehMentra) {
-        // Modo de teste: a "muleta" é a câmera do celular. Deixar isso explícito
-        // na tela evita a pior confusão possível numa demonstração — achar que
-        // está usando os óculos quando não está.
+        // Modo de teste: a "muleta" é a câmera do celular.
         CartaoPasso(
             numero = numero,
             titulo = "Câmera do celular",
@@ -196,6 +185,7 @@ internal fun CartaoWifiOculos(
     senha: String,
     onSenha: (String) -> Unit,
     onEnviar: () -> Unit,
+    redeDoTablet: br.com.facilmova.peritavision.data.RedeDoTablet? = null,
 ) {
     CartaoPasso(
         numero = numero,
@@ -223,6 +213,27 @@ internal fun CartaoWifiOculos(
                     "A rede fica salva no tablet e é enviada sozinha toda vez que os óculos conectam."
             }
         )
+        redeDoTablet?.let { rede ->
+            Spacer(Modifier.height(8.dp))
+            val nome = rede.ssid
+            val banda = rede.banda
+            val texto = when {
+                rede.foraDoAlcanceDosOculos ->
+                    "O tablet está numa rede de " + banda +
+                        (if (nome != null) " (" + nome + ")" else "") +
+                        " — OS ÓCULOS NÃO ENTRAM NESSA BANDA. É preciso uma rede 2,4 GHz: " +
+                        "no roteador do celular, ligue a compatibilidade estendida."
+                nome != null ->
+                    "O tablet está em " + nome +
+                        (if (banda.isNotBlank()) " (" + banda + ")" else "") +
+                        " — é quase sempre esta a rede a enviar."
+                banda.isNotBlank() -> "O tablet está numa rede de " + banda + "."
+                else -> ""
+            }
+            if (texto.isNotBlank()) {
+                TextoApoio(texto, if (rede.foraDoAlcanceDosOculos) Tom.ERRO else Tom.NEUTRO)
+            }
+        }
         Spacer(Modifier.height(10.dp))
         CampoPv(
             valor = ssid,
@@ -230,6 +241,14 @@ internal fun CartaoWifiOculos(
             rotulo = "Nome da rede (SSID)",
             habilitado = conectado,
         )
+        redeDoTablet?.ssid?.takeIf { it != ssid }?.let { doTablet ->
+            Spacer(Modifier.height(6.dp))
+            BotaoTonal(
+                texto = "Usar a rede do tablet: " + doTablet,
+                habilitado = conectado,
+                onClick = { onSsid(doTablet) },
+            )
+        }
         Spacer(Modifier.height(9.dp))
         CampoPv(
             valor = senha,
@@ -243,6 +262,44 @@ internal fun CartaoWifiOculos(
             texto = "Enviar Wi-Fi aos óculos",
             icone = R.drawable.ic_pv_wifi,
             habilitado = conectado,
+            onClick = onEnviar,
+        )
+    }
+}
+
+@Composable
+internal fun CartaoEnviosPendentes(
+    pendentes: List<br.com.facilmova.peritavision.rtmp.FilaDeEnvio.Pendente>,
+    enviando: Boolean,
+    progresso: String?,
+    onEnviar: () -> Unit,
+) {
+    if (pendentes.isEmpty() && !enviando) return
+    val totalMb = pendentes.sumOf { it.megabytes }
+    CartaoPv {
+        CabecalhoCartao(
+            titulo = "Vídeos para enviar",
+            etiqueta = if (enviando) "enviando" else "${pendentes.size} perícia(s)",
+            tomEtiqueta = if (enviando) Tom.ATENCAO else Tom.NEUTRO,
+            grande = true,
+        )
+        TextoApoio(
+            "O vídeo destas perícias ficou guardado no tablet. Ele sobe sozinho quando o tablet " +
+                "estiver em Wi-Fi sem perícia aberta — ou agora, pelo botão. O laudo de cada uma só é gerado depois que o vídeo subir.",
+        )
+        Spacer(Modifier.height(8.dp))
+        for (p in pendentes) {
+            LinhaDado(p.protocolo, "${p.arquivos} parte(s) · ${"%.0f".format(p.megabytes)} MB")
+        }
+        progresso?.let {
+            Spacer(Modifier.height(6.dp))
+            TextoApoio(it, Tom.ATENCAO)
+        }
+        Spacer(Modifier.height(12.dp))
+        BotaoTonal(
+            texto = if (enviando) "Enviando..." else "Enviar agora (${"%.0f".format(totalMb)} MB)",
+            icone = R.drawable.ic_pv_wifi,
+            habilitado = !enviando && pendentes.isNotEmpty(),
             onClick = onEnviar,
         )
     }
@@ -266,8 +323,7 @@ internal fun CartaoServidor(
     onIniciar: () -> Unit,
     onFinalizar: () -> Unit,
 ) {
-    // Sessão aberta fora do passo de destaque: o Finalizar mora no cartão de
-    // captura — este cartão simplesmente sai da frente.
+    // Sessão aberta fora do passo de destaque: o Finalizar mora no cartão de captura — este cartão simplesmente sai da frente.
     if (temSessao && !destaque) return
 
     CartaoPasso(
@@ -293,11 +349,7 @@ internal fun CartaoServidor(
         }
         Spacer(Modifier.height(10.dp))
         if (!temSessao) {
-            // QUEM ESTÁ NA BANCADA. Não é login — é identificação: o tablet é
-            // compartilhado e entra com a credencial dele (local.properties),
-            // e esta matrícula diz de quem é a perícia. É ela que separa os
-            // laudos por perito no painel. A senha existe onde importa: no
-            // painel web, para revisar e validar o laudo.
+            // QUEM ESTÁ NA BANCADA.
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CampoPv(
                     valor = matricula,
@@ -348,15 +400,7 @@ internal fun CartaoServidor(
     }
 }
 
-/**
- * A janela onde o decodificador desenha. Um SurfaceView cru, não um player: o
- * MediaCodec escreve direto na Surface, sem passar bitmap por Kotlin.
- *
- * A Surface nasce e morre com a view (o Android a destrói ao apagar a tela ou
- * ao rolar a lista para longe), e o decodificador precisa saber das duas
- * coisas — sem o surfaceDestroyed ele continuaria entregando quadro a uma
- * superfície morta e o codec cairia em IllegalStateException.
- */
+/** A janela onde o decodificador desenha. */
 @Composable
 internal fun VisorAoVivoDosOculos(
     decodificador: br.com.facilmova.peritavision.rtmp.DecodificadorDeVideo,
@@ -401,8 +445,6 @@ internal fun CartaoVisaoOculos(
     comFalha: Int = 0,
 ) {
     if (receptor != null) {
-        // MODO TABLET: sem player (ainda) — o que importa no teste de campo é
-        // saber que os quadros estão chegando, a que taxa e com que tamanho.
         val recebendo = receptor.publicando && System.currentTimeMillis() - receptor.ultimoQuadroMs < 4_000
         var segundos by remember(receptor.chave) { mutableIntStateOf(0) }
         LaunchedEffect(receptor.chave, receptor.publicando) {
@@ -415,20 +457,10 @@ internal fun CartaoVisaoOculos(
             receptor.erro != null -> receptor.erro
             receptor.publicando && !recebendo -> "Óculos conectados ao tablet, mas sem quadro há mais de 4 s."
             receptor.publicando -> "Recebendo direto dos óculos pela Wi-Fi da bancada — sem internet no caminho."
-            // O diagnóstico de rede (endereço, porta, handshake) foi para o log
-            // em 12/09/2026: na tela ele não ajuda o perito e assusta quem está
-            // assistindo. Aqui fica o que dá para FAZER a respeito.
             receptor.ultimoCliente != null ->
-                "Os óculos acharam o tablet, mas ainda não começaram a transmitir. Aguarde alguns segundos."
-            else -> "Aguardando os óculos transmitirem. Confira se estão na mesma Wi-Fi da bancada."
+                "Os óculos (${receptor.ultimoCliente}) chegaram ao tablet mas não começaram a publicar — handshake."
+            else -> "Aguardando os óculos publicarem em rtmp://${receptor.ip}:${receptor.porta}/pv/… (ninguém chegou à porta ainda)"
         }
-        // Com a IMAGEM na tela, nada escrito por cima dela: nem quadros por
-        // segundo, nem MB, nem segmento, nem fonte, nem protocolo — só a
-        // pílula AO VIVO e o cronômetro (09/09/2026: "tem como tirar essas
-        // escritas do vídeo?"). Os números continuam existindo, mas só
-        // aparecem quando não há imagem, que é quando servem de diagnóstico.
-        // `imagemEstado != null &&` explícito: com `imagemEstado?.x == true`
-        // o Kotlin não faz smart cast e o acesso seguinte não compila.
         val comImagem = imagem != null && imagemEstado != null &&
             imagemEstado.decodificando && (imagemEstado.quadrosNaTela > 0 || recebendo)
         val envio = buildString {
@@ -510,9 +542,6 @@ internal fun CartaoVisaoOculos(
             val exo = remember(urlFlv) {
                 androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
                     setMediaItem(androidx.media3.common.MediaItem.fromUri(urlFlv!!))
-                    // O monitor é só visual: com o áudio ligado, o tablet toca a
-                    // voz do perito de volta (eco) e alimenta o loop em que a IA
-                    // se ouve. Vídeo segue normal; áudio fica mudo.
                     volume = 0f
                     prepare()
                     playWhenReady = true

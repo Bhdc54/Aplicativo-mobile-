@@ -58,6 +58,7 @@ android {
         buildConfigField("String", "PV_PROTOCOLO", segredo("pv.protocolo"))
         // Assistente IA de bancada (ponte Gemini Live). Vazio = recurso oculto.
         buildConfigField("String", "PV_PONTE_URL", segredo("pv.ponte"))
+        buildConfigField("String", "PV_PONTE_TOKEN", segredo("pv.ponte.token"))
     }
 
     signingConfigs {
@@ -81,6 +82,18 @@ android {
             buildConfigField("String", "PV_MATRICULA", "\"\"")
             buildConfigField("String", "PV_SENHA", "\"\"")
             buildConfigField("String", "PV_PROTOCOLO", "\"\"")
+        }
+        // Homologação: instala ao lado do app de produção (outro applicationId) e
+        // fala só com o ambiente de teste. Endereços em local.properties:
+        // pv.backend.homolog, pv.ponte.homolog, pv.ponte.token.homolog.
+        create("homologacao") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".homolog"
+            versionNameSuffix = "-homolog"
+            matchingFallbacks += listOf("debug")
+            buildConfigField("String", "PV_BACKEND", segredo("pv.backend.homolog"))
+            buildConfigField("String", "PV_PONTE_URL", segredo("pv.ponte.homolog"))
+            buildConfigField("String", "PV_PONTE_TOKEN", segredo("pv.ponte.token.homolog"))
         }
     }
     compileOptions {
@@ -128,6 +141,9 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.4.1")
     // Leitor de codigo de barras do lacre (tela pronta do Google Play Services).
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // WebRTC (libwebrtc empacotado): visao ao vivo e voz da pericia assistida remota.
+    implementation("io.getstream:stream-webrtc-android:1.3.8")
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

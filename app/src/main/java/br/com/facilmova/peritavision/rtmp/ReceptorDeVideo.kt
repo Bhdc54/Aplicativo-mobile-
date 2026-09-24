@@ -1,9 +1,4 @@
 // O tablet como destino do vídeo dos óculos (ver RtmpIngest.kt).
-//
-// Este arquivo é a parte que conhece Android: descobre o IP do tablet na
-// Wi-Fi, sobe o RtmpIngest numa porta, guarda os segmentos em
-// filesDir/video/<sessão>/ e resume o que está chegando num estado simples
-// para o cartão "Visão dos óculos" (quadros/s, tamanho, segmentos).
 package br.com.facilmova.peritavision.rtmp
 
 import android.content.Context
@@ -132,8 +127,6 @@ class ReceptorDeVideo(context: Context) {
                 aoQuadro?.invoke(ev)
             }
             is RtmpIngest.Evento.Encerrado -> {
-                // Rotação: o arquivo fechou para subir, mas os óculos seguem
-                // publicando no arquivo seguinte — a tela não pode piscar "sem vídeo".
                 estado = estado.copy(publicando = if (ev.continua) estado.publicando else false,
                     segmentosFechados = estado.segmentosFechados + 1,
                     quadrosPorSegundo = if (ev.continua) estado.quadrosPorSegundo else 0.0,
@@ -150,9 +143,7 @@ class ReceptorDeVideo(context: Context) {
         }
     }
 
-    /** IPv4 do tablet na rede Wi-Fi. Primeiro pelo ConnectivityManager (a rede
-     *  ativa com transporte Wi-Fi); se não der, varre as interfaces wlan.
-     *  Público porque o receptor de FOTOS precisa do mesmo endereço. */
+    /** IPv4 do tablet na rede Wi-Fi. */
     fun ipNaWifi(): String? {
         try {
             val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager

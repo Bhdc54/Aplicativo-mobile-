@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import br.com.facilmova.peritavision.assistida.CanalAssistido
 import br.com.facilmova.peritavision.audio.FeedbackDeVoz
 import br.com.facilmova.peritavision.device.GlassesDevice
 import br.com.facilmova.peritavision.device.GlassesDeviceFactory
@@ -104,13 +105,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// ── Marca ───────────────────────────────────────────────────────────────────
-// A logo em si é um arquivo: res/drawable/logo.xml. Para trocar pela logo real,
-// leia as instruções que estão dentro daquele arquivo — não precisa vir aqui.
-/** Quanto da requisição vai para a sessão da BANCADA (a IA que fala com o
- *  perito). O laudo continua recebendo o documento inteiro: aqui o limite
- *  existe porque o contexto viaja como UM turno de texto da sessão Live, e um
- *  turno gigante consome a janela de contexto e emudece o modelo. */
+/** Quanto da requisição vai para a sessão da BANCADA (a IA que fala com o perito). */
 private const val LIMITE_REQUISICAO_BANCADA = 8000
 
 private const val SLOGAN_APP = "Perícia assistida · POLITEC-MT"
@@ -119,13 +114,8 @@ private const val SLOGAN_APP = "Perícia assistida · POLITEC-MT"
 // Troque para PHONE para testar sem oculos (usa a camera do celular).
 private val TIPO_DISPOSITIVO = GlassesDeviceFactory.Tipo.MENTRA
 
-// ── Backend ─────────────────────────────────────────────────────────────────
-// Servidor em nuvem: funciona de qualquer rede (Wi-Fi ou 4G).
 private val BACKEND_PADRAO = BuildConfig.PV_BACKEND
-// Conta de DISPOSITIVO: o app autentica sozinho; a identidade do perito
-// fica no site. Em producao vira provisionamento por aparelho.
-// Credenciais de dev vem do local.properties via BuildConfig — nada de
-// senha no codigo-fonte (este arquivo vai para o git).
+// Conta de DISPOSITIVO: o app autentica sozinho; a identidade do perito fica no site.
 private val MATRICULA_PADRAO = BuildConfig.PV_MATRICULA
 private val SENHA_PADRAO = BuildConfig.PV_SENHA
 // PV_PROTOCOLO (local.properties) NÃO preenche mais a tela: o campo começa
@@ -134,12 +124,7 @@ private val SENHA_PADRAO = BuildConfig.PV_SENHA
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Desenha de ponta a ponta (obrigatório a partir do targetSdk 35). O
-        // cabeçalho e a barra de status respeitam os insets mais abaixo.
-        // Estilo FIXO em claro: o app agora e sempre tema claro (Theme.kt), mas
-        // enableEdgeToEdge() sem argumento segue o modo escuro do APARELHO — com
-        // o tablet em modo escuro, os icones da barra de status ficariam brancos
-        // sobre o fundo branco do app. Fixar o estilo claro = icones escuros.
+        // Desenha de ponta a ponta (obrigatório a partir do targetSdk 35).
         enableEdgeToEdge(
             statusBarStyle = androidx.activity.SystemBarStyle.light(
                 android.graphics.Color.TRANSPARENT,
@@ -158,12 +143,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/**
- * Onde a tela está, no fluxo do perito. Serve para uma coisa só: decidir qual
- * cartão sobe para o topo e recebe destaque.
- */
+/** Onde a tela está, no fluxo do perito. */
 private enum class Passo { CONECTAR, SESSAO, CAPTURAR }
-
 
 @Composable
 fun CaptureScreen() {
@@ -218,15 +199,15 @@ fun CaptureScreen() {
     var ultima by remember { mutableStateOf<Evidencia?>(null) }
     LaunchedEffect(vozFeedback) { vozFeedback.onStatus = { msg -> status = msg } }
 
-    // ── Assistente IA de bancada (ponte Gemini Live) — AUTOMÁTICO na sessão.
-    // Liga sozinho quando a sessão de perícia abre e desliga quando ela fecha
-    // (ver o LaunchedEffect logo depois da declaração de sessaoId). O toque no
-    // cartão vira o desliga/religa manual do perito. Com a ponte ativa, uma
-    // CÓPIA do áudio dos óculos vai ao Gemini (aviso de custódia em
-    // PonteGemini.kt); o caminho offline oficial continua intacto em paralelo.
-    // (Declarado antes do VoiceTrigger porque as falas do app consultam
-    // ponteGemini — função/variável local só é visível abaixo da declaração.)
     var ponteGemini by remember { mutableStateOf<PonteGemini?>(null) }
+    // Perícia assistida remota: enquanto a sala existe, a perita oficial ocupa o lugar do assistente de IA.
+    var canalAssistido by remember { mutableStateOf<CanalAssistido?>(null) }
+    var codigoSalaAssistida by remember { mutableStateOf<String?>(null) }
+    var peritaOnline by remember { mutableStateOf(false) }
+    var instrucaoAssistida by remember { mutableStateOf<InstrucaoAssistida?>(null) }
+    var marcacaoDaPerita by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var assistidaStatus by remember { mutableStateOf<String?>(null) }
+    var assistidaMudo by remember { mutableStateOf(false) }
     // Aba Configurações (engrenagem): roteiro fixo ou "perguntar", e modelo.
     val config = remember { ConfiguracoesApp(context) }
     var mostrarConfiguracoes by remember { mutableStateOf(false) }
@@ -236,12 +217,7 @@ fun CaptureScreen() {
     var iaPerguntandoTrilha by remember { mutableStateOf(false) }
     /** MODO da IA: conversa | silencio | pausa (troca por palavra; toque é reserva). */
     var iaModo by remember { mutableStateOf("conversa") }
-    /** QUEM MANDA NA GRAVAÇÃO. Separado do iaModo de propósito: o iaModo é
-     *  espelho do servidor, e o servidor devolve "conversa" toda vez que a
-     *  sessão do Gemini (re)abre — reconexão de Wi-Fi ou redeploy da ponte
-     *  cancelavam a pausa sozinhos, religavam o vídeo e gravavam um marcador
-     *  de "retomada por voz" que ninguém pediu (revisão 04/09). Só troca de
-     *  modo pedida pelo perito (voz ou toque) mexe aqui. */
+    /** QUEM MANDA NA GRAVAÇÃO. */
     var gravacaoPausada by remember { mutableStateOf(false) }
     /** Achados registrados pela IA nesta sessão (registrar_achado), para o cartão do laudo. */
     var achados by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -262,18 +238,11 @@ fun CaptureScreen() {
     }
     /** Diagnóstico da saída de voz (por onde o som sai; erros). */
     var iaVoz by remember { mutableStateOf("") }
-    /** TELA APAGADA por comando de voz ("PeritaVision, apaga a tela") — para
-     *  luz forense com a sala escura. Não é o desligar do Android: o app segue
-     *  em primeiro plano (áudio, vídeo e narração continuam); a tela vira um
-     *  painel preto com brilho mínimo. "Acende a tela" ou um toque voltam. */
+    /** TELA APAGADA por comando de voz ("PeritaVision, apaga a tela") — para luz forense com a sala escura. */
     var telaApagada by remember { mutableStateOf(false) }
     var iaPerito by remember { mutableStateOf("") }
-    /** Quando a última captura foi disparada (qualquer via). Trava a FOTO EM
-     *  DOBRO: a frase "assistente, capture uma foto disso" contém a palavra
-     *  "capturar", então o comando offline dispara E o Gemini chama a função
-     *  capturar_foto — sem esta trava saíam duas fotos da mesma cena. */
+    /** Quando a última captura foi disparada (qualquer via). */
     var ultimaCapturaMs by remember { mutableStateOf(0L) }
-    /** Quando a IA pediu para encerrar pela 1ª vez (aguardando confirmação). */
     var pedidoFinalizarMs by remember { mutableStateOf(0L) }
     /** Encerramento em curso — trava propria, para o pedido nao ser engolido
      *  pelo `ocupado` de outra operacao (ver finalizarSessao). */
@@ -281,19 +250,13 @@ fun CaptureScreen() {
     /** Fala do perito acumulada para a NARRAÇÃO do laudo (tudo vai; o cartão
      *  na tela mostra só as perguntas com o chamado "PeritaVision"). */
     var narracaoPendente by remember { mutableStateOf("") }
-    // NARRAÇÕES DA BANCADA: cópia local do que já foi gravado no backend
-    // (pericia.trecho_narracao). Alimenta, na tela, a seção "Considerações"
-    // do laudo em preenchimento — o laudo final continua sendo montado pelo
-    // servidor no Finalizar. Zera quando uma sessão nova abre.
+    // NARRAÇÕES DA BANCADA: cópia local do que já foi gravado no backend (pericia.trecho_narracao).
     var narracoes by remember { mutableStateOf<List<String>>(emptyList()) }
     var narracaoUltimoMs by remember { mutableStateOf(0L) }
     /** true enquanto a fala em curso contém o chamado — controla a exibição. */
     var falaComChamado by remember { mutableStateOf(false) }
     var iaResposta by remember { mutableStateOf("") }
-    /** true quando o servidor confirma que o vídeo dos óculos chegou ao
-     *  Gemini. Sem isso o assistente responde "no escuro" — e já chamou um
-     *  celular de peça íntima. O cartão mostra isso para o perito saber se
-     *  pode confiar no que ele diz estar vendo. */
+    /** true quando o servidor confirma que o vídeo dos óculos chegou ao Gemini. */
     var iaEnxergando by remember { mutableStateOf(false) }
     /** true só durante a janela em que a IA está realmente OLHANDO. */
     var iaOlhandoAgora by remember { mutableStateOf(false) }
@@ -301,20 +264,12 @@ fun CaptureScreen() {
     /** true quando o perito DESLIGOU o assistente à mão nesta sessão. */
     var iaDesligadaManual by remember { mutableStateOf(false) }
 
-    /** UMA voz só na bancada. Quem fala é o Gemini sempre que o assistente
-     *  existe — mesmo nos segundos em que ele ainda está conectando (checar
-     *  ponteGemini == null aqui criava a corrida das DUAS VOZES na abertura:
-     *  o TTS anunciava a sessão e o resumo do Gemini vinha por cima). A voz
-     *  sintética do Android só assume quando não há ponte configurada ou o
-     *  perito desligou o assistente. */
+    /** UMA voz só na bancada. */
     fun falarSeSemIa(texto: String) {
         val iaExiste = BuildConfig.PV_PONTE_URL.isNotBlank() && !iaDesligadaManual
         if (!iaExiste) vozFeedback.falar(texto)
     }
 
-    // ── Comando de voz ────────────────────────────────────────────────────
-    // Declarado ANTES do coletor de eventos porque ele precisa acionar a voz
-    // (uma funcao/variavel local so e visivel abaixo de onde foi declarada).
     val voz = remember {
         VoiceTrigger(context, onComando = {
             ultimaCapturaMs = System.currentTimeMillis()
@@ -328,7 +283,6 @@ fun CaptureScreen() {
     var audioStreamer by remember { mutableStateOf<AudioStreamer?>(null) }
     LaunchedEffect(voz) { voz.onStatus = { msg -> status = msg } }
 
-    // ── Backend: endereco editavel, cliente e sessao aberta ────────────────
     val escopo = rememberCoroutineScope()
     var enderecoBackend by remember { mutableStateOf(BACKEND_PADRAO) }
     val backend = remember { BackendClient(BACKEND_PADRAO) }
@@ -336,25 +290,13 @@ fun CaptureScreen() {
     var laudoId by remember { mutableStateOf<String?>(null) }
     var ocupado by remember { mutableStateOf(false) }
     var fotosEnviadas by remember { mutableIntStateOf(0) }
-    /** Capturas que NÃO viraram foto: os óculos recusaram e ficou só a marca no
-     *  vídeo, para o servidor tentar recortar o quadro no fim. Contado separado
-     *  de propósito — misturar as duas coisas escondeu do perito que o laudo
-     *  ia sair sem imagem (campo 08/09/2026). */
     var quadrosMarcados by remember { mutableIntStateOf(0) }
     /** Nome (ou matrícula) de quem o SERVIDOR pôs como responsável pela
      *  perícia — o que decide em qual lista o laudo aparece no painel. */
     var peritoDaSessao by remember { mutableStateOf<String?>(null) }
-    /** FOTOS JÁ RECEBIDAS pelo servidor, com a miniatura baixada — o perito
-     *  confere na bancada se a foto saiu boa (foco, luz, enquadramento) antes
-     *  de sair da mesa. Pedido de campo 08/09/2026: "às vezes as fotos ficaram
-     *  ruins, aí precisamos ver como ficou". O JPEG nunca passa pelo app na
-     *  captura (os óculos sobem direto ao servidor), então vem de volta daqui. */
     var fotosDaPericia by remember { mutableStateOf<List<FotoNaTela>>(emptyList()) }
     var fotoAmpliada by remember { mutableStateOf<FotoNaTela?>(null) }
-    /** A mesma foto em resolução alta, baixada quando o perito amplia. A
-     *  miniatura de 480 px esticada na tela do tablet é upscale de 3x: dá para
-     *  ver enquadramento, mas NÃO dá para julgar foco — que é justamente por
-     *  que o perito abre a foto. */
+    /** A mesma foto em resolução alta, baixada quando o perito amplia. */
     var bitmapAmpliado by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     LaunchedEffect(fotoAmpliada?.id) {
         bitmapAmpliado = null
@@ -364,10 +306,12 @@ fun CaptureScreen() {
         }
     }
 
-    // Declaradas aqui (e não junto dos estados da IA, mais acima) porque usam
-    // sessaoId — em Kotlin, função local não enxerga variável declarada abaixo.
     fun ligarAssistenteIa() {
         if (ponteGemini != null) return
+        if (canalAssistido != null) {
+            status = "Assistente IA desligado: a perita oficial está conduzindo esta perícia."
+            return
+        }
         if (BuildConfig.PV_PONTE_URL.isBlank()) {
             status = "Assistente IA: configure pv.ponte no local.properties."
             return
@@ -386,9 +330,7 @@ fun CaptureScreen() {
                 bipe(modo)
                 gravacaoPausada = modo == "pausa"
             } else if (gravacaoPausada) {
-                // Sessão Gemini reabriu (reconexão, troca de trilha, redeploy)
-                // e o servidor voltou para conversa. A gravação continua
-                // pausada: reafirma para a ponte e não religa nada.
+                // Sessão Gemini reabriu (reconexão, troca de trilha, redeploy) e o servidor voltou para conversa.
                 ponteGemini?.definirModo("pausa")
             } else {
                 iaModo = modo
@@ -408,14 +350,9 @@ fun CaptureScreen() {
                 escopo.launch { backend.registrarEvento(sid, "marcador", "achado", "ia", a) }
             }
         }
-        // A ponte não pergunta mais o exame (09/09/2026): a trilha vem de
-        // Configurações, da memória ou dos materiais do caso. O evento fica
-        // por compatibilidade com uma ponte antiga ainda no ar.
         ponte.onTriagem = { iaPerguntandoTrilha = true; iaTrilha = null }
         ponte.onVoz = { d -> iaVoz = d }
         // Trilha definida: a sessão de trabalho está de pé com o roteiro certo.
-        // Fica no cartão e vai para a trilha de auditoria da sessão (evento
-        // 'sistema'), para o laudo e o histórico saberem qual roteiro guiou.
         ponte.onTrilha = { id, nome, origem ->
             iaPerguntandoTrilha = false
             iaTrilha = if (id == "nenhuma") nome else "Trilha ${id.uppercase()} — $nome"
@@ -430,19 +367,13 @@ fun CaptureScreen() {
                 escopo.launch { backend.registrarEvento(sid, "sistema", "trilha:$id", "ponte:$origem") }
             }
         }
-        // As transcrições chegam em PEDAÇOS (streaming): acumula em vez de
-        // substituir — antes cada pedacinho apagava o anterior e o texto
-        // "passava correndo" na tela. Fala nova do perito (primeiro pedaço
-        // depois de uma resposta) limpa o par e começa o turno seguinte.
         ponte.onVideoAtivo = { iaEnxergando = true }
         ponte.onVisao = { ativa -> iaOlhandoAgora = ativa }
         ponte.onTranscricao = { t ->
-            // TUDO que o perito fala vira narração do laudo (buffer com
-            // descarga por pausa — ver LaunchedEffect da narração).
+            // TUDO que o perito fala vira narração do laudo (buffer com descarga por pausa — ver LaunchedEffect da narração).
             narracaoPendente += t
             narracaoUltimoMs = System.currentTimeMillis()
-            // Na TELA, só as falas dirigidas à IA (contêm o chamado). A fala
-            // comum do perito não é conversa com o app — poluía o cartão.
+            // Na TELA, só as falas dirigidas à IA (contêm o chamado).
             if (iaResposta.isNotBlank()) { iaPerito = ""; iaResposta = ""; falaComChamado = false }
             val comChamado = falaComChamado ||
                 t.contains("peritavision", ignoreCase = true) ||
@@ -458,10 +389,6 @@ fun CaptureScreen() {
         ponteGemini = ponte
         status = "Assistente IA conectando..."
     }
-    // NARRAÇÃO → LAUDO: as transcrições chegam em pedacinhos; junta e, após
-    // 2 s sem fala nova (ou 1500+ caracteres acumulados), grava o trecho no
-    // backend (pericia.trecho_narracao). É esta narração que o gerador usa
-    // como fonte primária para preencher os campos do laudo.
     LaunchedEffect(ponteGemini, sessaoId) {
         val id = sessaoId ?: return@LaunchedEffect
         if (ponteGemini == null) return@LaunchedEffect
@@ -493,10 +420,7 @@ fun CaptureScreen() {
         iaDesligadaManual = false
         ligarAssistenteIa()
     }
-    // AUTOMÁTICO: sessão abriu → assistente liga sozinho; sessão fechou →
-    // desliga junto. Se o perito desligar à mão no meio da sessão, fica
-    // desligado até a próxima sessão (nada religa antes disso) — o toque
-    // dele manda mais que o automatismo.
+    // AUTOMÁTICO: sessão abriu → assistente liga sozinho; sessão fechou → desliga junto.
     LaunchedEffect(sessaoId) {
         if (sessaoId != null) {
             iaDesligadaManual = false
@@ -504,6 +428,14 @@ fun CaptureScreen() {
         } else {
             ponteGemini?.encerrar()
             ponteGemini = null
+            canalAssistido?.encerrar(avisarServidor = true)
+            canalAssistido = null
+            codigoSalaAssistida = null
+            peritaOnline = false
+            instrucaoAssistida = null
+            marcacaoDaPerita = null
+            assistidaStatus = null
+            assistidaMudo = false
             iaPerito = ""
             iaResposta = ""
             iaEnxergando = false
@@ -517,8 +449,6 @@ fun CaptureScreen() {
             telaApagada = false
         }
     }
-    // Brilho mínimo enquanto a tela está "apagada" e a tela não pode dormir
-    // (se o Android bloqueasse, o app iria para o fundo). Restaura ao voltar.
     LaunchedEffect(telaApagada) {
         val janela = (context as? android.app.Activity)?.window ?: return@LaunchedEffect
         val attrs = janela.attributes
@@ -532,13 +462,25 @@ fun CaptureScreen() {
     // Wi-Fi DOS OCULOS: o JPEG sobe pela rede do oculos, nao pelo Bluetooth.
     var wifiOculos by remember { mutableStateOf(false) }
     var ssidOculos by remember { mutableStateOf<String?>(null) }
-    /** A rede salva já foi enviada NESTA conexão BLE? Um envio automático por
-     *  conexão: evita o laço "óculos dizem sem Wi-Fi → envia → falha → dizem
-     *  sem Wi-Fi → envia…" e zera quando o BLE cai. */
+    /** A rede salva já foi enviada NESTA conexão BLE? */
     var wifiEnviadaNestaConexao by remember { mutableStateOf(false) }
     // Rede do local vem salva (Configurações) e vai sozinha aos óculos ao conectar.
     var wifiSsid by remember { mutableStateOf(config.wifiSsid) }
     var wifiSenha by remember { mutableStateOf(config.wifiSenha) }
+    var redeDoTablet by remember { mutableStateOf<br.com.facilmova.peritavision.data.RedeDoTablet?>(null) }
+    LaunchedEffect(conectado, mostrarConfiguracoes, wifiOculos) {
+        val rede = withContext(Dispatchers.IO) {
+            runCatching { br.com.facilmova.peritavision.data.redeAtualDoTablet(context) }.getOrNull()
+        }
+        redeDoTablet = rede
+        // Campo vazio (tablet novo, app recém-instalado) e o Android deixou
+        // ler o nome: entra pronto. Nunca sobrescreve o que o perito digitou.
+        val doTablet = rede?.ssid.orEmpty()
+        if (wifiSsid.isBlank() && doTablet.isNotBlank() && rede?.foraDoAlcanceDosOculos == false) {
+            wifiSsid = doTablet
+            config.wifiSsid = doTablet
+        }
+    }
     // Matrícula: a última que abriu perícia neste tablet (Configurações), ou a
     // de dev do local.properties na primeira vez. Protocolo: sempre vazio.
     var matricula by remember { mutableStateOf(config.ultimaMatricula.ifBlank { MATRICULA_PADRAO }) }
@@ -548,49 +490,30 @@ fun CaptureScreen() {
     var rtmpUrl by remember { mutableStateOf<String?>(null) }
     var videoLigado by remember { mutableStateOf(false) }
 
-    // ── RECEPTOR LOCAL (05/09/2026): o tablet como destino do vídeo ──────────
-    // Com config.videoNoTablet, os óculos publicam para este tablet na Wi-Fi da
-    // bancada em vez da VPS. O receptor grava os .flv em filesDir/video/<sessão>
-    // e sobe cada segmento ao servidor quando ele fecha (pausa, queda, fim).
-    // Congelado por sessão: trocar em Configurações com a perícia aberta não
-    // pode religar o stream no meio — a tela promete "vale para a próxima".
     val videoNoTablet = remember(sessaoId) { config.videoNoTablet }
+    val enviarDepois = remember(sessaoId) { config.videoNoTablet && config.videoEnviarDepois }
     val receptor = remember { br.com.facilmova.peritavision.rtmp.ReceptorDeVideo(context) }
-    // ── A FOTO PELO TABLET ───────────────────────────────────────────────────
-    // O vídeo já vinha para cá pela Wi-Fi da bancada; a foto ia sozinha para o
-    // webhook público, na internet. Em 08/09/2026 o vídeo chegou inteiro e as
-    // duas fotos se perderam no caminho. Agora as duas coisas entram pela mesma
-    // porta: os óculos entregam o JPEG ao tablet, o tablet mostra a miniatura
-    // na hora e repassa ao servidor com repetição.
-    // A IMAGEM dos óculos na tela do tablet. O receptor já entregava os
-    // quadros; ninguém decodificava, e o cartão mostrava só números — o perito
-    // olhou o retângulo preto e disse "o vídeo não aparece no tablet".
     val decodificador = remember { br.com.facilmova.peritavision.rtmp.DecodificadorDeVideo() }
     var decodificadorEstado by remember {
         mutableStateOf(br.com.facilmova.peritavision.rtmp.DecodificadorDeVideo.Estado())
     }
-    /** ARQUIVO, ESTADO E DECISÃO das fotos do tablet — tudo o que antes eram
-     *  sete variáveis e três funções soltas aqui dentro. Ela é stdlib puro e
-     *  tem teste (_to_delete/teste/CustodiaDeFotosTeste.kt); esta tela só
-     *  orquestra a rede, que é a parte que precisa de corrotina. */
     val custodia = remember {
         br.com.facilmova.peritavision.custodia.CustodiaDeFotos(java.io.File(context.filesDir, "fotos"))
     }
     /** A SurfaceView do visor ao vivo, enquanto está na tela. É dela que sai
      *  o quadro quando os óculos recusam a foto por estarem transmitindo. */
     var visorAoVivo by remember { mutableStateOf<android.view.SurfaceView?>(null) }
-    /**
-     * O quadro que está no visor AGORA, em JPEG, ou null se o visor não está
-     * na tela (modo servidor, tela apagada) ou a cópia falhou. PixelCopy lê a
-     * Surface que o MediaCodec desenha — no tamanho do vídeo (1920x1088), não
-     * no da view.
-     */
-    suspend fun quadroDoVisor(): ByteArray? {
+    /** Copia o quadro atual do visor ao vivo (PixelCopy). Quem chama recicla o bitmap. */
+    suspend fun bitmapDoVisor(maxLargura: Int? = null): android.graphics.Bitmap? {
         val view = visorAoVivo ?: return null
         if (view.width <= 0 || view.height <= 0 || !view.holder.surface.isValid) return null
         val largura = decodificadorEstado.largura.takeIf { it > 0 } ?: view.width
         val altura = decodificadorEstado.altura.takeIf { it > 0 } ?: view.height
-        val bitmap = android.graphics.Bitmap.createBitmap(largura, altura, android.graphics.Bitmap.Config.ARGB_8888)
+        val escala = if (maxLargura != null && largura > maxLargura) maxLargura.toDouble() / largura else 1.0
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            (largura * escala).toInt().coerceAtLeast(1), (altura * escala).toInt().coerceAtLeast(1),
+            android.graphics.Bitmap.Config.ARGB_8888,
+        )
         val copiou = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
             runCatching {
                 android.view.PixelCopy.request(
@@ -601,13 +524,88 @@ fun CaptureScreen() {
             }.onFailure { if (cont.isActive) cont.resumeWith(Result.success(false)) }
         }
         if (!copiou) { bitmap.recycle(); return null }
+        return bitmap
+    }
+    suspend fun jpegDoVisor(maxLargura: Int?, qualidade: Int): ByteArray? {
+        val bitmap = bitmapDoVisor(maxLargura) ?: return null
         return withContext(Dispatchers.IO) {
             java.io.ByteArrayOutputStream().use { saida ->
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, saida)
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, qualidade, saida)
                 bitmap.recycle()
                 saida.toByteArray()
             }
         }
+    }
+    suspend fun quadroDoVisor(): ByteArray? = jpegDoVisor(null, 92)
+    /** Como [quadroDoVisor], mas REDUZIDO para a IA: até 1024 px de largura,
+     *  JPEG 70. É o que vai à ponte 1x por segundo no modo vídeo no tablet. */
+    suspend fun quadroParaIa(): ByteArray? = jpegDoVisor(1024, 70)
+
+    fun encerrarSalaAssistida(avisarServidor: Boolean) {
+        canalAssistido?.encerrar(avisarServidor)
+        canalAssistido = null
+        codigoSalaAssistida = null
+        peritaOnline = false
+        instrucaoAssistida = null
+        marcacaoDaPerita = null
+        assistidaMudo = false
+    }
+
+    /** Abre a sala no servidor, desliga o assistente de IA e conecta a sinalização (voz + visão ao vivo). */
+    fun abrirSalaAssistida() {
+        val sid = sessaoId ?: return
+        val jwt = backend.token ?: run { status = "Sem sessão no servidor — abra a perícia primeiro."; return }
+        if (canalAssistido != null || ocupado) return
+        ocupado = true
+        escopo.launch {
+            try {
+                val sala = backend.criarSalaAssistida(sid)
+                ponteGemini?.encerrar()
+                ponteGemini = null
+                iaEnxergando = false
+                iaPerguntandoTrilha = false
+                iaModo = "conversa"
+                gravacaoPausada = false
+                val canal = CanalAssistido(context, backend.urlSinalAssistida(sid), jwt) { bitmapDoVisor(960) }
+                canal.onStatus = { assistidaStatus = it }
+                canal.onPeritaOnline = { online ->
+                    peritaOnline = online
+                    if (!online) instrucaoAssistida = null
+                }
+                canal.onInstrucao = { id, texto -> instrucaoAssistida = InstrucaoAssistida(id, texto); bipe("achado") }
+                canal.onFoto = {
+                    val agora = System.currentTimeMillis()
+                    if (agora - ultimaCapturaMs >= 6_000) {
+                        ultimaCapturaMs = agora
+                        device.capturarFoto()
+                    }
+                }
+                canal.onMarcacao = { x, y -> marcacaoDaPerita = x to y }
+                canal.onEncerrada = {
+                    encerrarSalaAssistida(avisarServidor = false)
+                    status = "A perita encerrou a sala. O assistente de IA pode ser religado no cartão do assistente."
+                }
+                codigoSalaAssistida = sala.codigo
+                assistidaStatus = null
+                canalAssistido = canal
+                canal.conectar()
+                backend.registrarEvento(sid, "sistema", "assistida_ia_desligada", "campo")
+                status = "Sala aberta — passe o código à perita oficial."
+            } catch (e: Exception) {
+                status = "Não foi possível abrir a sala: ${e.message}"
+            } finally {
+                ocupado = false
+            }
+        }
+    }
+    LaunchedEffect(marcacaoDaPerita) {
+        if (marcacaoDaPerita != null) {
+            kotlinx.coroutines.delay(6_000)
+            marcacaoDaPerita = null
+        }
+    }
+    LaunchedEffect(canalAssistido, fotosEnviadas) {
+        canalAssistido?.estado(fotosEnviadas, null)
     }
     val receptorFotos = remember { br.com.facilmova.peritavision.net.ReceptorDeFotos(custodia) }
     var resumoFotos by remember {
@@ -621,14 +619,7 @@ fun CaptureScreen() {
     var receptorFotosEstado by remember {
         mutableStateOf(br.com.facilmova.peritavision.net.ReceptorDeFotos.Estado())
     }
-    /**
-     * Sobe ao backend uma foto que já está no tablet, insistindo. Devolve true
-     * quando o SERVIDOR aceitou — só isso conta como foto no laudo.
-     *
-     * Aqui ficou só o que precisa de corrotina e de rede. Quem sabe onde está
-     * o arquivo, qual é a credencial, quantas faltam e se o caminho do tablet
-     * ainda serve é a custódia, que é testável fora do aparelho.
-     */
+    /** Sobe ao backend uma foto que já está no tablet, insistindo. */
     suspend fun repassarFoto(requestId: String, arquivo: java.io.File, daSessao: String?, tentativas: Int): Boolean {
         val cred = custodia.credencial(requestId, daSessao) ?: return false
         if (!custodia.tomarParaEnvio(requestId)) return false
@@ -643,17 +634,10 @@ fun CaptureScreen() {
                 }
                 return true
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // Cancelamento NÃO é falha de rede: engolir aqui deixava o
-                // arquivo pendente com o servidor já tendo a imagem, e a
-                // sessão seguinte o subia de novo.
                 custodia.devolver(requestId)
                 throw e
             } catch (e: Exception) {
                 val codigo = (e as? br.com.facilmova.peritavision.net.BackendException)?.codigo ?: 0
-                // Token de USO ÚNICO: 401/403/409/410 depois de uma tentativa
-                // que talvez tenha chegado significa que o servidor JÁ tem
-                // esta foto. Insistir era prometer "tento de novo" para
-                // sempre, com a foto já no laudo.
                 if (t > 1 && codigo in listOf(401, 403, 409, 410)) {
                     android.util.Log.i("PV-Fotos", "repasse de $requestId: token queimado ($codigo) — já estava no servidor")
                     withContext(Dispatchers.IO) { custodia.confirmarEnvio(requestId, arquivo) }
@@ -670,11 +654,69 @@ fun CaptureScreen() {
     var segmentosSubindo by remember { mutableIntStateOf(0) }
     var segmentosSubidos by remember { mutableIntStateOf(0) }
     var segmentosComFalha by remember { mutableIntStateOf(0) }
-    LaunchedEffect(receptor) {
+    /** Segmentos que ficaram no tablet de propósito (modo enviar depois). */
+    var segmentosGuardados by remember { mutableIntStateOf(0) }
+    // FILA DE ENVIO: perícias finalizadas com vídeo guardado no tablet.
+    val filaEnvio = remember { br.com.facilmova.peritavision.rtmp.FilaDeEnvio(receptor) }
+    var enviosPendentes by remember { mutableStateOf<List<br.com.facilmova.peritavision.rtmp.FilaDeEnvio.Pendente>>(emptyList()) }
+    var enviando by remember { mutableStateOf(false) }
+    var progressoEnvio by remember { mutableStateOf<String?>(null) }
+    fun recontarPendentes() { enviosPendentes = filaEnvio.pendentes(excetoSessao = sessaoId) }
+    /** Sobe tudo o que está guardado. Login com a credencial do tablet, como
+     *  no Iniciar perícia — sem sessão aberta não há token vivo. */
+    fun enviarPendentes(origem: String) {
+        if (enviando || ocupado) return
+        escopo.launch {
+            enviando = true
+            try {
+                backend.baseUrl = enderecoBackend.trim()
+                progressoEnvio = "Entrando no servidor..."
+                withContext(Dispatchers.IO) { backend.login(MATRICULA_PADRAO, senhaPerito) }
+                val r = withContext(Dispatchers.IO) {
+                    filaEnvio.enviarTudo(backend, excetoSessao = sessaoId) { texto -> escopo.launch { progressoEnvio = texto } }
+                }
+                progressoEnvio = null
+                val motivo = r.ultimoErro?.let { " ($it)" } ?: ""
+                status = when {
+                    r.concluidas > 0 && r.falhas == 0 -> "${r.concluidas} perícia(s) com vídeo no servidor (${r.bytes / 1_000_000} MB) — laudo em geração"
+                    r.concluidas > 0 -> "${r.concluidas} concluída(s), ${r.falhas} ficaram para depois$motivo"
+                    // Vídeo chegou inteiro, mas o servidor não aceitou o pedido de laudo (rota ausente, sem permissão...).
+                    r.videosSubidos > 0 -> "Vídeo de ${r.videosSubidos} perícia(s) no servidor, mas o laudo não foi pedido$motivo — fica para a próxima tentativa"
+                    r.falhas > 0 -> "Nenhum vídeo subiu$motivo — tente de novo"
+                    else -> "Nada para enviar"
+                }
+            } catch (e: Exception) {
+                progressoEnvio = null
+                status = "Envio dos vídeos falhou: ${e.message}"
+            } finally {
+                enviando = false
+                recontarPendentes()
+            }
+        }
+    }
+    LaunchedEffect(sessaoId) {
+        recontarPendentes()
+        if (sessaoId == null && enviosPendentes.isNotEmpty()) {
+            delay(20_000)
+            recontarPendentes()
+            val emWifi = withContext(Dispatchers.IO) {
+                runCatching { br.com.facilmova.peritavision.data.redeAtualDoTablet(context) }.getOrNull() != null
+            }
+            if (sessaoId == null && emWifi && enviosPendentes.isNotEmpty() && !enviando) enviarPendentes("automático")
+        }
+    }
+    // enviarDepois nas chaves: a lambda abaixo captura o valor, e ele muda de uma perícia para a outra.
+    LaunchedEffect(receptor, enviarDepois) {
         receptor.aoMudar = { e -> receptorEstado = e }
         receptor.aoQuadro = { q -> decodificador.aceitar(q) }
         decodificador.aoMudar = { e -> escopo.launch { decodificadorEstado = e } }
-        receptor.aoSegmentoFechado = { chave, arquivo ->
+        receptor.aoSegmentoFechado = fechado@{ chave, arquivo ->
+            if (enviarDepois) {
+                // Fica no tablet: sobe em lote, pelo botão ou sozinho com Wi-Fi.
+                segmentosGuardados += 1
+                android.util.Log.i("PV-Receptor", "segmento ${arquivo.name} guardado para envio posterior (${arquivo.length() / 1_000_000} MB)")
+                return@fechado
+            }
             segmentosSubindo += 1
             escopo.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val inicioMs = arquivo.name.removeSuffix(".flv").toLongOrNull() ?: arquivo.lastModified()
@@ -697,9 +739,6 @@ fun CaptureScreen() {
             }
         }
     }
-    // Receptor de FOTOS: ligado sempre que há sessão e o tablet tem IP na
-    // Wi-Fi — inclusive quando o vídeo vai direto ao servidor, porque o
-    // problema da foto nunca foi o vídeo, foi o alcance da internet.
     LaunchedEffect(sessaoId) {
         if (sessaoId != null) {
             val ip = withContext(Dispatchers.IO) { receptor.ipNaWifi() }
@@ -708,13 +747,9 @@ fun CaptureScreen() {
                 status = "As fotos vão direto ao servidor ($erro) — se a bancada não tiver internet, elas não chegam"
             }
             withContext(Dispatchers.IO) { custodia.recontarParadas() }
-            // VÍDEO QUE FICOU DE OUTRA PERÍCIA. Um upload que não terminou antes
-            // do finalizar deixava o .flv no tablet para sempre e a perícia sem
-            // vídeo (10/09/2026: 16 min, 600 MB). Agora, com o backend logado
-            // para esta sessão, o que sobrou das anteriores sobe em segundo
-            // plano; o servidor reconsolida ao receber (segmento atrasado).
+            // VÍDEO QUE FICOU DE OUTRA PERÍCIA.
             val atual = sessaoId
-            escopo.launch(Dispatchers.IO) {
+            if (!config.videoEnviarDepois) escopo.launch(Dispatchers.IO) {
                 val antigas = receptor.sessoesComSegmentos().filter { it != atual }
                 for (antiga in antigas) {
                     for (arquivo in receptor.segmentosDe(antiga)) {
@@ -743,10 +778,7 @@ fun CaptureScreen() {
         receptorFotos.aoEstranhar = { texto ->
             escopo.launch { status = "Envio dos óculos não virou foto: $texto" }
         }
-        // Só aceita depositar foto quem tem uma captura em aberto (o requestId
-        // é um uuid do servidor). Se os óculos mandarem o Bearer, ele também é
-        // conferido. Sem isto qualquer aparelho da rede poderia sobrescrever a
-        // foto do perito e queimar o token de uso único.
+        // Só aceita depositar foto quem tem uma captura em aberto (o requestId é um uuid do servidor).
         receptorFotos.autorizacaoValida = { requestId, token ->
             val cred = custodia.credencial(requestId, null)
             cred != null && (token == null || cred.authToken.isBlank() || token == cred.authToken)
@@ -759,9 +791,7 @@ fun CaptureScreen() {
                     status = "Foto chegou ao tablet sem autorização casada (${r.requestId.take(8)}) — ficou no tablet"
                     return@launch
                 }
-                // MINIATURA NA HORA, do arquivo local: é o motivo de a foto vir
-                // pelo tablet. O perito julga foco e luz sem depender de a
-                // imagem ir ao servidor e voltar.
+                // MINIATURA NA HORA, do arquivo local: é o motivo de a foto vir pelo tablet.
                 val local = withContext(Dispatchers.IO) {
                     runCatching { miniaturaDe(r.arquivo.readBytes()) }.getOrNull()
                 }
@@ -771,9 +801,6 @@ fun CaptureScreen() {
                         kb = r.bytes / 1024, requestId = r.requestId,
                     )
                 }
-                // A contagem, a marca no vídeo que cai quando a foto atrasada
-                // chega e a confiança no caminho do tablet são todas da
-                // custódia agora — e todas têm teste.
                 val ok = repassarFoto(r.requestId, r.arquivo, daSessao, 4)
                 if (ok) {
                     fotosEnviadas += 1
@@ -786,9 +813,7 @@ fun CaptureScreen() {
             }
         }
     }
-    // VARREDURA DAS PENDENTES. A promessa de "tento de novo" era falsa: nada
-    // relia a pasta. Agora, enquanto a sessão está aberta, cada foto parada no
-    // tablet é oferecida ao servidor de meio em meio minuto.
+    // VARREDURA DAS PENDENTES.
     LaunchedEffect(sessaoId) {
         val daSessao = sessaoId ?: return@LaunchedEffect
         while (true) {
@@ -806,14 +831,21 @@ fun CaptureScreen() {
     LaunchedEffect(sessaoId, videoNoTablet) {
         if (sessaoId != null && videoNoTablet) {
             (device as? MentraGlassesDevice)?.perfilVideo =
-                if (config.qualidadeVideoTablet == ConfiguracoesApp.QUALIDADE_1080P30) MentraGlassesDevice.PerfilVideo.TABLET_1080P30
-                else MentraGlassesDevice.PerfilVideo.TABLET_720P30
+                when (config.qualidadeVideoTablet) {
+                    ConfiguracoesApp.QUALIDADE_1080P30 -> MentraGlassesDevice.PerfilVideo.TABLET_1080P30
+                    ConfiguracoesApp.QUALIDADE_720P_FLUIDO -> MentraGlassesDevice.PerfilVideo.TABLET_720P_FLUIDO
+                    ConfiguracoesApp.QUALIDADE_1080P_FLUIDO -> MentraGlassesDevice.PerfilVideo.TABLET_1080P_FLUIDO
+                    else -> MentraGlassesDevice.PerfilVideo.TABLET_720P30
+                }
             // Socket fora da thread principal (o Android barra bind/close na main).
             val erro = withContext(Dispatchers.IO) { receptor.ligar() }
             status = if (erro == null) "Receptor de vídeo do tablet ligado em ${receptor.estado.ip}:${receptor.estado.porta}"
                      else "Receptor de vídeo: $erro"
         } else {
-            (device as? MentraGlassesDevice)?.perfilVideo = MentraGlassesDevice.PerfilVideo.SERVIDOR
+            (device as? MentraGlassesDevice)?.perfilVideo =
+                if (config.qualidadeVideoServidor == ConfiguracoesApp.QUALIDADE_SERVIDOR_FLUIDO)
+                    MentraGlassesDevice.PerfilVideo.SERVIDOR_FLUIDO
+                else MentraGlassesDevice.PerfilVideo.SERVIDOR
             if (sessaoId == null) withContext(Dispatchers.IO) { receptor.desligar() }
         }
     }
@@ -823,21 +855,13 @@ fun CaptureScreen() {
     val urlDoStream: String? =
         if (videoNoTablet) sessaoId?.takeIf { receptorEstado.ligado }?.let { receptor.urlPara(it) } else rtmpUrl
 
-    // "Visão dos óculos": o mesmo stream RTMP que os óculos mandam ao backend,
-    // devolvido como HTTP-FLV pelo node-media-server. Porta 8100 porque no
-    // servidor de produção a 8001 já estava ocupada por outro serviço —
-    // RTMP_HTTP_PORT=8100 no Coolify tem que estar igual a esta constante.
-    // rtmp://host:1935/pv/ID → http://host:8100/pv/ID.flv
-    // No modo tablet não existe HTTP-FLV: o cartão mostra o que o receptor recebe.
+    // "Visão dos óculos": o mesmo stream RTMP que os óculos mandam ao backend, devolvido como HTTP-FLV pelo node-media-server.
     val urlVisao = if (videoNoTablet) null else rtmpUrl?.let { r ->
         Regex("^rtmp://([^:/]+)(?::\\d+)?/(.+)$").find(r)?.let { m ->
             "http://${m.groupValues[1]}:8100/${m.groupValues[2]}.flv"
         }
     }
 
-    // ── Leitura de lacre PELOS ÓCULOS ─────────────────────────────────────
-    // O perito toca no botão, os óculos fotografam o código de barras, o
-    // servidor decodifica e consulta o Atena; a ficha do caso aparece na tela.
     var fichaLacre by remember { mutableStateOf<BackendClient.FichaLacre?>(null) }
     var lendoLacre by remember { mutableStateOf(false) }
     /** O que o Atena devolveu ao abrir a sessão — vira contexto do assistente IA. */
@@ -845,25 +869,21 @@ fun CaptureScreen() {
     LaunchedEffect(sessaoId) { if (sessaoId == null) casoAtena = null }
     // Sessão nova → a lista de narrações da tela começa do zero.
     LaunchedEffect(sessaoId) { if (sessaoId != null) narracoes = emptyList() }
-    /** Texto da requisição do Atena — o que a autoridade pediu. */
     var textoRequisicao by remember { mutableStateOf<String?>(null) }
-    /** Por que NÃO há texto: sem documento no caso, ou documento ilegível. O
-     *  contexto da IA precisa disso — faltar o texto e faltar a informação de
-     *  que não existe requisição são coisas diferentes para quem conduz. */
     var avisoRequisicao by remember { mutableStateOf<String?>(null) }
-    /** true enquanto o documento está sendo baixado. O contexto NÃO sai nesse
-     *  meio: sem isto o assistente abria a perícia anunciando "não há
-     *  requisição anexada" e, quando o texto chegava, já não fazia o resumo
-     *  de abertura (o prompt só o faz na primeira vez). */
+    /** true enquanto o documento está sendo baixado. */
     var requisicaoCarregando by remember { mutableStateOf(false) }
+    var requisicaoInexistente by remember { mutableStateOf(false) }
     LaunchedEffect(casoAtena) {
         textoRequisicao = null
         avisoRequisicao = null
+        requisicaoInexistente = false
         requisicaoCarregando = false
         val caso = casoAtena ?: return@LaunchedEffect
         val docId = caso.documentoId
         if (docId.isNullOrBlank()) {
-            avisoRequisicao = "o caso não tem documento anexado no Atena"
+            requisicaoInexistente = true
+            avisoRequisicao = "este protocolo não tem requisição anexada no Atena"
             return@LaunchedEffect
         }
         requisicaoCarregando = true
@@ -878,17 +898,18 @@ fun CaptureScreen() {
         }
     }
 
-    // ── O assistente IA "vê" e "conhece o caso" ─────────────────────────────
-    // Sempre que a ponte (re)abrir ou o vídeo/ficha mudarem, manda ao servidor
-    // da IA: a URL do FLV dos óculos (o servidor puxa ~1 quadro/s dela e o
-    // Gemini passa a ver a bancada) e a ficha do lacre como contexto textual
-    // (para responder "qual o nome do solicitante?" sem inventar).
+    LaunchedEffect(ponteGemini, videoNoTablet, videoLigado, sessaoId) {
+        if (ponteGemini == null || !videoNoTablet || !videoLigado || sessaoId == null) return@LaunchedEffect
+        while (true) {
+            val ponte = ponteGemini ?: break
+            val jpeg = runCatching { quadroParaIa() }.getOrNull()
+            if (jpeg != null) ponte.enviarQuadro(jpeg)
+            delay(1_000)
+        }
+    }
     LaunchedEffect(ponteGemini, urlVisao) {
         ponteGemini?.definirVideo(urlVisao)
-        // Cinto de segurança: enquanto o assistente não confirmar que está
-        // ENXERGANDO, reenvia a URL do vídeo a cada 20 s. Cobre mensagem
-        // perdida na reconexão e corrida entre a sessão Gemini abrir e o
-        // pedido de vídeo chegar.
+        // Cinto de segurança: enquanto o assistente não confirmar que está ENXERGANDO, reenvia a URL do vídeo a cada 20 s.
         while (ponteGemini != null && urlVisao != null && !iaEnxergando) {
             kotlinx.coroutines.delay(20_000)
             if (!iaEnxergando) ponteGemini?.definirVideo(urlVisao)
@@ -897,10 +918,8 @@ fun CaptureScreen() {
     LaunchedEffect(
         ponteGemini, fichaLacre, casoAtena, textoRequisicao, avisoRequisicao,
         requisicaoCarregando, protocolo,
-        // Sem estas duas chaves o contexto podia ser montado ANTES de a sessão
-        // dizer de quem é a perícia, e o aviso de responsabilidade nunca
-        // chegaria à IA — que é justamente o que ele precisa anunciar.
         peritoDaSessao, matriculaNaoCadastrada,
+        requisicaoInexistente,
     ) {
         if (ponteGemini == null) return@LaunchedEffect
         // Espera o documento decidir se existe ou não antes de abrir a boca.
@@ -908,16 +927,8 @@ fun CaptureScreen() {
         val f = fichaLacre
         val a = casoAtena
         val texto = buildString {
-            // Primeira vez → resumo de abertura falado (único momento em que a
-            // IA fala sem ser chamada); reenvio (reconexão) → só "Contexto
-            // atualizado." — o modo de chamada por nome está no prompt (1.1).
             append("CONTEXTO DO CASO (na PRIMEIRA vez, faça o resumo de abertura falado; se já o fez nesta sessão, responda apenas \"Contexto atualizado.\"): ")
             append("protocolo ${protocolo.trim().ifBlank { "não informado" }}.")
-            // AVISO DE RESPONSABILIDADE (08/09/2026): a matrícula digitada não
-            // existe no cadastro, então o laudo vai sair no nome de outra
-            // pessoa. O perito de luvas não lê a tela — quem tem de dizer isso
-            // é a voz, na primeira frase da abertura. O núcleo do prompt tem a
-            // regra que obriga isso.
             matriculaNaoCadastrada?.let { mat ->
                 append(" AVISO DE RESPONSABILIDADE: a matrícula $mat, digitada no tablet, NÃO está")
                 append(" cadastrada no sistema. Esta perícia está registrada no nome de")
@@ -927,8 +938,6 @@ fun CaptureScreen() {
             peritoDaSessao?.takeIf { matriculaNaoCadastrada == null }?.let {
                 append(" Perito responsável por esta perícia: $it.")
             }
-            // Dados do Atena resolvidos na abertura da sessão — cobrem o caso
-            // aberto por protocolo digitado, sem passar pela leitura do lacre.
             if (a != null) {
                 a.autoridade?.let { append(" Nome do solicitante: $it.") }
                 a.unidadeRequisitante?.let { append(" Unidade requisitante: $it.") }
@@ -945,12 +954,7 @@ fun CaptureScreen() {
             }
             val req = textoRequisicao
             if (req != null) {
-                // RECORTE, não o texto integral. Desde que o backend passou a
-                // ler o ZIP da requisição inteira, isto podia ter 120 mil
-                // caracteres: um turno de texto desse tamanho na sessão Live
-                // come a janela de contexto e a IA emudece. O laudo usa o
-                // texto completo; a bancada precisa do começo, que é onde
-                // está o histórico do fato e o que a autoridade pediu.
+                // RECORTE, não o texto integral.
                 val recorte = req.take(LIMITE_REQUISICAO_BANCADA)
                 append(" CONTEÚDO DO DOCUMENTO PRINCIPAL (requisição anexada no Atena; ")
                 append("quando houver linhas \"===== ARQUIVO n/N \u2014 nome =====\", cada trecho é um ")
@@ -961,14 +965,23 @@ fun CaptureScreen() {
                     append("o restante está no laudo. Se o perito perguntar algo que não está aqui, diga que ")
                     append("essa parte do documento não veio para a bancada.]")
                 }
-            } else {
-                // Sem isto a IA só ficava sem o texto e improvisava. Agora ela
-                // sabe que não há requisição e o que dizer ao perito.
-                append(" SEM REQUISIÇÃO NESTA SESSÃO: ${avisoRequisicao ?: "documento do Atena indisponível"}. ")
-                append("Você NÃO tem o que a autoridade pediu. Conduza pelo roteiro e pelos dados de cadastro acima. ")
-                append("Se o perito perguntar o que foi requisitado, diga exatamente que não há requisição legível ")
-                append("anexada a este protocolo e ofereça registrar o que ele ditar. NUNCA invente, resuma nem ")
+            } else if (requisicaoInexistente) {
+                // ROTINA, NÃO FALHA: o protocolo veio sem requisição anexada.
+                append(" ESTE PROTOCOLO NÃO TEM REQUISIÇÃO ANEXADA no Atena. Isso é comum e NÃO é falha ")
+                append("do sistema: não diga que houve erro, que algo falhou ou que não conseguiu abrir nada. ")
+                append("Conduza pelo roteiro e pelos dados de cadastro acima. Se o perito perguntar o histórico ")
+                append("dos fatos ou o que foi requisitado, diga com naturalidade que este protocolo veio sem ")
+                append("requisição anexada e ofereça registrar o que ele ditar. NUNCA invente, resuma nem ")
                 append("suponha o teor da requisição, do histórico do fato ou do boletim de ocorrência.")
+            } else {
+                append(" A REQUISIÇÃO DESTE PROTOCOLO NÃO PÔDE SER LIDA AGORA (motivo técnico registrado no ")
+                append("servidor: ${avisoRequisicao ?: "documento do Atena indisponível"}). NÃO repita esse motivo ")
+                append("técnico em voz alta e não use palavras como backend, servidor, erro de comunicação ou ")
+                append("código. Você NÃO tem o que a autoridade pediu. Conduza pelo roteiro e pelos dados de ")
+                append("cadastro acima. Se o perito perguntar o histórico dos fatos ou o que foi requisitado, ")
+                append("diga que o documento não pôde ser aberto nesta sessão, que ele pode tentar de novo mais ")
+                append("tarde, e ofereça registrar o que ele ditar. NUNCA invente, resuma nem suponha o teor da ")
+                append("requisição, do histórico do fato ou do boletim de ocorrência.")
             }
             if (f != null) {
                 append(" Lacre lido: ${f.codigo}.")
@@ -1024,9 +1037,12 @@ fun CaptureScreen() {
         }
     }
 
-    /** Login -> resolve o protocolo -> abre a sessao. Um botao so. */
-    fun iniciarSessao() {
+    var continuacaoPendente by remember { mutableStateOf<BackendClient.PericiaAnterior?>(null) }
+
+    /** Login -> resolve o protocolo -> abre a sessao. */
+    fun iniciarSessao(modo: String? = null) {
         if (ocupado) return
+        continuacaoPendente = null
         escopo.launch {
             ocupado = true
             try {
@@ -1038,15 +1054,24 @@ fun CaptureScreen() {
                 casoAtena = caso
                 val perfilId = backend.primeiroPerfil()
                 status = "Abrindo sessão..."
-                val aberta = backend.abrirSessao(caso.id, perfilId, matricula.trim())
+                val resposta = backend.abrirSessao(caso.id, perfilId, matricula.trim(), modo)
+                if (resposta is BackendClient.Abertura.Escolher) {
+                    // Nada foi aberto: a tela pergunta e chama de novo com o modo.
+                    continuacaoPendente = resposta.anterior
+                    status = "Este protocolo já tem uma perícia sua finalizada — continuar ou começar outra?"
+                    return@launch
+                }
+                val aberta = (resposta as BackendClient.Abertura.Aberta).sessao
                 config.ultimaMatricula = matricula // lembra para a próxima perícia
                 sessaoId = aberta.sessaoId
                 rtmpUrl = aberta.rtmpUrl
                 laudoId = null
-                if (aberta.retomada) {
-                    // O backend achou a sessão que ficou aberta (app caiu, tablet
-                    // reiniciou): a perícia continua nela, com as fotos que já
-                    // estavam lá — e vai gerar UM laudo só.
+                if (modo == "continuar" && aberta.retomada) {
+                    fotosEnviadas = aberta.fotosRecebidas
+                    quadrosMarcados = 0
+                    falarSeSemIa("Perícia reaberta. O que você capturar agora entra no mesmo laudo.")
+                    status = "Perícia reaberta — ${aberta.fotosRecebidas} foto(s) já no laudo; o que capturar agora entra junto"
+                } else if (aberta.retomada) {
                     fotosEnviadas = aberta.fotosRecebidas
                     quadrosMarcados = 0
                     falarSeSemIa("Sessão retomada. Pode continuar de onde parou.")
@@ -1057,20 +1082,13 @@ fun CaptureScreen() {
                     falarSeSemIa("Sessão iniciada. Pode capturar.")
                     status = "Sessão aberta — pode capturar"
                 }
-                // DE QUEM É A PERÍCIA. O tablet é compartilhado e entra no
-                // backend com a credencial dele, não com a do perito; quem
-                // separa os laudos é a matrícula digitada. Quando ela não
-                // existe, a perícia ficava no nome do usuário do tablet EM
-                // SILÊNCIO — o perito só descobria não achando o laudo na
-                // lista dele (campo 08/09/2026).
+                // DE QUEM É A PERÍCIA.
                 peritoDaSessao = aberta.peritoNome ?: aberta.peritoMatricula
                 matriculaNaoCadastrada = aberta.matriculaDesconhecida
                 if (aberta.matriculaDesconhecida != null) {
                     status = "ATENÇÃO: matrícula ${aberta.matriculaDesconhecida} não existe no sistema — " +
                         "a perícia ficou no nome de ${peritoDaSessao ?: "quem está logado no tablet"}"
-                    // Pelo portão de UMA voz: com o assistente ligado, quem
-                    // anuncia isso é a IA (regra do núcleo). O TTS do Android
-                    // falando por cima era a segunda voz da abertura (09/09).
+                    // Pelo portão de UMA voz: com o assistente ligado, quem anuncia isso é a IA (regra do núcleo).
                     falarSeSemIa(
                         "Atenção: a matrícula digitada não existe no sistema. " +
                             "Esta perícia vai ficar no nome de outro usuário.",
@@ -1086,19 +1104,7 @@ fun CaptureScreen() {
         }
     }
 
-    /**
-     * Fecha a sessao; o backend monta o laudo. E DEVOLVE O RESULTADO REAL em
-     * `aoTerminar` — quem pediu (a IA) so anuncia encerramento depois disso.
-     *
-     * Campo 04/09: o perito confirmou o encerramento, a IA disse que estava
-     * finalizado e a tela FICOU NA BANCADA. Duas causas, as duas aqui:
-     *   1. `if (ocupado) return` engolia o pedido em silencio quando outra
-     *      chamada estava em curso — nada acontecia e ninguem sabia;
-     *   2. quem chamava respondia ok=true ANTES do backend responder, entao
-     *      um erro (401, 500, rede) virava so um texto na barra de status,
-     *      que o perito de luvas nunca le.
-     * Agora: espera a vez em vez de desistir, e o sucesso/erro volta por voz.
-     */
+    /** Fecha a sessao; o backend monta o laudo. */
     fun finalizarSessao(aoTerminar: ((Boolean, String) -> Unit)? = null) {
         val id = sessaoId
         if (id == null) {
@@ -1109,14 +1115,9 @@ fun CaptureScreen() {
             aoTerminar?.invoke(false, "o encerramento já está em andamento; aguarde")
             return
         }
-        // Recusa não pode voltar o rito para a estaca zero: quem chama zera o
-        // pedidoFinalizarMs antes, e a próxima tentativa perguntaria "confirma
-        // o encerramento?" de novo, logo depois de o perito ter confirmado.
         pedidoFinalizarMs = System.currentTimeMillis()
         finalizando = true
-        // A partir daqui a IA não ouve mais ninguém: o encerramento leva
-        // minutos e ela respondia a quem falasse perto dos óculos. Só a
-        // confirmação final ("sessão encerrada") ainda sai pela voz dela.
+        // A partir daqui a IA não ouve mais ninguém: o encerramento leva minutos e ela respondia a quem falasse perto dos óculos.
         ponteGemini?.definirEncerrando(true)
         escopo.launch {
             // So devolve o `ocupado` se foi ESTE encerramento que o tomou —
@@ -1140,16 +1141,21 @@ fun CaptureScreen() {
                 tomouOcupado = true
                 if (videoLigado) {
                     status = "Encerrando o vídeo dos óculos..."
-                    // Falha aqui nao pode travar o encerramento: o RTMP cai
-                    // sozinho quando a sessao fecha no servidor.
+                    // Falha aqui nao pode travar o encerramento: o RTMP cai sozinho quando a sessao fecha no servidor.
                     runCatching { device.pararVideo() }
                     videoLigado = false
                     kotlinx.coroutines.delay(1500)
                 }
-                if (videoNoTablet) {
-                    // Os óculos fecham a publicação, o receptor fecha o segmento e
-                    // o upload começa sozinho. Espera isso acabar (teto 3 min) para
-                    // o servidor ter o vídeo quando montar o laudo.
+                if (videoNoTablet && enviarDepois) {
+                    // Só espera o receptor FECHAR o último segmento (os óculos
+                    // pararam de publicar); nada sobe agora.
+                    var esperaFecho = 0
+                    while (receptorEstado.publicando && esperaFecho < 15_000) { kotlinx.coroutines.delay(500); esperaFecho += 500 }
+                    val mb = receptor.segmentosDe(id).sumOf { it.length() } / 1_000_000.0
+                    filaEnvio.registrar(id, protocolo.trim().ifBlank { "perícia ${id.take(8)}" })
+                    status = "Vídeo guardado no tablet (${"%.0f".format(mb)} MB) — sobe depois, em Vídeos para enviar"
+                } else if (videoNoTablet) {
+                    // Os óculos fecham a publicação, o receptor fecha o segmento e o upload começa sozinho.
                     kotlinx.coroutines.delay(2_500)
                     var esperaVideo = 0
                     while ((segmentosSubindo > 0 || receptorEstado.publicando) && esperaVideo < 180_000) {
@@ -1158,19 +1164,13 @@ fun CaptureScreen() {
                         kotlinx.coroutines.delay(500); esperaVideo += 500
                     }
                     if (segmentosComFalha > 0 || receptor.segmentosDe(id).isNotEmpty()) {
-                        // Isto não é só o vídeo: as fotos que os óculos não
-                        // deram são recortadas DO VÍDEO no servidor. Segmento
-                        // que não subiu = quadro que não vira imagem no laudo.
+                        // Isto não é só o vídeo: as fotos que os óculos não deram são recortadas DO VÍDEO no servidor.
                         falarSeSemIa("Atenção: parte do vídeo ficou no tablet. A perícia será finalizada mesmo assim, e o vídeo sobe sozinho quando o tablet tiver rede.")
                         status = "Vídeo: ${receptor.segmentosDe(id).size} segmento(s) ficaram no tablet — sobem sozinhos na próxima perícia aberta com rede, e o laudo ganha o vídeo"
                         kotlinx.coroutines.delay(2_000)
                     }
                 }
-                // FOTOS PARADAS NO TABLET. O laço do vídeo acima já existia;
-                // as fotos não tinham nenhum. Finalizar cancelava a varredura e
-                // derrubava o receptor no mesmo instante em que o laudo era
-                // montado — a foto ficava no tablet e o laudo saía sem imagem,
-                // exatamente o desfecho de 08/09/2026.
+                // FOTOS PARADAS NO TABLET.
                 run {
                     var esperaFoto = 0
                     while (esperaFoto < 120_000) {
@@ -1194,24 +1194,22 @@ fun CaptureScreen() {
                 }
                 status = "Finalizando sessão..."
                 // Última fala ainda no buffer entra na narração antes do laudo.
-                // Limpa ANTES de mandar: o laço de narração acorda a cada
-                // 700 ms e gravava o mesmo trecho outra vez enquanto o POST
-                // estava em voo — a frase saía duplicada nas considerações.
                 val ultimaFala = narracaoPendente.trim()
                 narracaoPendente = ""
                 if (ultimaFala.isNotBlank()) {
                     narracoes = narracoes + ultimaFala
                     runCatching { backend.narrar(id, ultimaFala) }
                 }
-                laudoId = backend.finalizarSessao(id)
-                // Confirma para quem pediu ANTES de fechar a ponte (fechar a
-                // sessao derruba o WebSocket da IA no efeito de sessaoId).
-                aoTerminar?.invoke(true, "sessão encerrada; o laudo entrou em processamento")
-                status = "Laudo gerado — revise e baixe no site do PeritaVision"
-                falarSeSemIa("Sessão finalizada. Laudo em processamento.")
-                // Espera a IA TERMINAR de anunciar antes de fechar a ponte:
-                // com 2,5 s fixos o encerrar() cortava a frase no meio ("sessão
-                // encerra—") e o perito de luvas não sabia se tinha encerrado.
+                laudoId = backend.finalizarSessao(id, videoDepois = videoNoTablet && enviarDepois)
+                if (videoNoTablet && enviarDepois) {
+                    aoTerminar?.invoke(true, "sessão encerrada; o vídeo ficou guardado no tablet e o laudo será gerado quando ele for enviado ao servidor — diga isso ao perito")
+                    status = "Sessão encerrada — o laudo sai quando o vídeo subir (cartão Vídeos para enviar)"
+                    falarSeSemIa("Sessão finalizada. O laudo será gerado quando o vídeo for enviado.")
+                } else {
+                    aoTerminar?.invoke(true, "sessão encerrada; o laudo entrou em processamento")
+                    status = "Laudo gerado — revise e baixe no site do PeritaVision"
+                    falarSeSemIa("Sessão finalizada. Laudo em processamento.")
+                }
                 if (aoTerminar != null) {
                     val ponte = ponteGemini
                     kotlinx.coroutines.delay(1_200) // dá tempo de o áudio começar
@@ -1232,15 +1230,11 @@ fun CaptureScreen() {
                 pedidoFinalizarMs = 0L
                 bipe("conversa")
             } catch (e: Exception) {
-                // A pericia CONTINUA ABERTA. Libera a retentativa imediata
-                // (sem o rito de dois tempos de novo) e avisa por voz.
+                // A pericia CONTINUA ABERTA.
                 ponteGemini?.definirEncerrando(false) // a IA volta a ouvir
                 pedidoFinalizarMs = System.currentTimeMillis()
                 val motivo = e.message ?: "erro desconhecido"
                 status = "Erro ao finalizar: $motivo"
-                // vozFeedback direto, NÃO falarSeSemIa: com a IA ligada o
-                // falarSeSemIa cala, e o perito ficava sem nenhum retorno de
-                // um encerramento que falhou (só um texto na barra de status).
                 vozFeedback.falar("Não consegui finalizar. A perícia continua aberta.")
                 aoTerminar?.invoke(
                     false,
@@ -1255,11 +1249,7 @@ fun CaptureScreen() {
         }
     }
 
-    // GALERIA DA BANCADA. Recarrega quando o contador de fotos muda (captura
-    // nova ou quadro recuperado) e insiste por cerca de três minutos — a foto
-    // dos óculos leva alguns segundos para subir pela Wi-Fi deles, e sem
-    // insistir a miniatura da última foto não aparecia. Cada captura nova
-    // relança o efeito, então na prática a galeria acompanha a perícia toda.
+    // GALERIA DA BANCADA.
     LaunchedEffect(sessaoId, fotosEnviadas, quadrosMarcados) {
         val id = sessaoId
         if (id == null) { fotosDaPericia = emptyList(); return@LaunchedEffect }
@@ -1267,9 +1257,6 @@ fun CaptureScreen() {
         while (tentativas < 12) {
             val lista = runCatching { backend.listarFotos(id) }.getOrNull()
             if (lista != null) {
-                // Uma por vez, publicando na tela conforme chega: com dez fotos e
-                // rede ruim, baixar o lote inteiro antes de mostrar deixava a
-                // bancada em branco por minutos.
                 for (meta in lista) {
                     // takeIf: quem falhou o download fica com miniatura nula e é
                     // TENTADA DE NOVO. Sem isso a foto ficava "…" para sempre.
@@ -1285,9 +1272,6 @@ fun CaptureScreen() {
                         kb = (meta.bytes / 1024).toInt(),
                         requestId = meta.requestId,
                     )
-                    // Tira a versão LOCAL da mesma captura: ela já foi mostrada
-                    // na bancada assim que o tablet recebeu, e agora a do
-                    // servidor (a que vai ao laudo) toma o lugar.
                     fotosDaPericia = (
                         fotosDaPericia.filterNot { f ->
                             f.id == meta.id ||
@@ -1305,15 +1289,11 @@ fun CaptureScreen() {
         }
     }
 
-    // Injeta no Mentra COMO pedir autorizacao de captura ao backend. Sem isso,
-    // falar "capturar" nao faz nada (era exatamente o sintoma anterior).
+    // Injeta no Mentra COMO pedir autorizacao de captura ao backend.
     LaunchedEffect(device) {
         (device as? MentraGlassesDevice)?.obterAutorizacao = {
             sessaoId?.let { id ->
                 val c = backend.solicitarCaptura(id)
-                // O receptor recorta o requestId da URL para `[A-Za-z0-9_-]`:
-                // se o formato mudar no servidor, a URL do tablet passaria a
-                // não casar e TODA foto levaria 403. Nesse caso, webhook.
                 val idSeguro = Regex("^[A-Za-z0-9_-]{4,80}$").matches(c.requestId)
                 val noTablet = if (idSeguro && custodia.deveUsarTablet()) receptorFotos.urlPara(c.requestId) else null
                 if (noTablet == null) {
@@ -1325,22 +1305,8 @@ fun CaptureScreen() {
                             webhookUrl = c.webhookUrl, authToken = c.authToken,
                         )
                     )
-                    // Relógio de desistência: se o arquivo não aparecer, a
-                    // captura vira MARCA no vídeo e o perito sabe disso na
-                    // bancada, não no painel horas depois. Ele SÓ AVISA — a
-                    // credencial fica no mapa, porque os óculos ainda podem
-                    // entregar a foto (o comando BLE, a foto MEDIUM e o POST
-                    // disputam a mesma Wi-Fi do vídeo). Tirar a credencial aqui
-                    // fazia a foto atrasada morrer no tablet.
                     escopo.launch {
                         kotlinx.coroutines.delay(60_000)
-                        // Preso À SESSÃO: sem isto, capturar e finalizar em menos
-                        // de um minuto fazia "marquei o quadro no vídeo" aparecer
-                        // depois de "laudo gerado", na tela da perícia seguinte.
-                        // A pista está no contador de conexões: se ninguém abriu
-                        // TCP na porta, os óculos não tentaram — não é formato de
-                        // envio, é endereço ou rede. A custódia decide o que fazer
-                        // com essa informação (e isso tem teste).
                         val houveConexao = receptorFotosEstado.conexoes > 0
                         if (sessaoId == id && custodia.credencial(c.requestId, id) != null &&
                             custodia.desistirDaFoto(c.requestId, houveConexao)
@@ -1370,24 +1336,16 @@ fun CaptureScreen() {
                 is GlassesEvent.Conexao -> {
                     conectado = evento.conectado
                     conectando = false
-                    // Caiu o BLE/Wi-Fi: o stream morreu com ele. Sem zerar
-                    // isto o vídeo NUNCA religava na reconexão (o efeito exige
-                    // !videoLigado) e o cartão seguia mostrando "AO VIVO".
+                    // Caiu o BLE/Wi-Fi: o stream morreu com ele.
                     if (!evento.conectado) videoLigado = false
                     if (!evento.conectado) {
                         // O BLE caiu e com ele o que sabíamos da Wi-Fi dos óculos.
-                        // Sem zerar, `wifiOculos` ficava true da conexão anterior e
-                        // o reenvio automático abaixo era pulado na volta — a rede
-                        // só ia de novo fechando e abrindo o app (campo 09/09/2026).
                         wifiOculos = false
                         ssidOculos = null
                         wifiEnviadaNestaConexao = false
                     }
                     status = if (evento.conectado) "Óculos conectado" else "Óculos desconectado"
-                    // WI-FI AUTOMÁTICO: conectou e há rede salva → envia sem
-                    // pedir nada. Espera 2,5 s para os óculos reportarem o
-                    // estado deles primeiro — se já estiverem nessa rede, não
-                    // reenvia (o envio derruba e religa a conexão).
+                    // WI-FI AUTOMÁTICO: conectou e há rede salva → envia sem pedir nada.
                     if (evento.conectado && wifiSsid.isNotBlank()) {
                         escopo.launch {
                             delay(2_500)
@@ -1395,11 +1353,6 @@ fun CaptureScreen() {
                                 wifiEnviadaNestaConexao = true
                                 status = "Enviando a Wi-Fi salva (${wifiSsid.trim()}) aos óculos..."
                                 (device as? MentraGlassesDevice)?.configurarWifi(wifiSsid.trim(), wifiSenha)
-                                // SEGUNDA CHANCE (15/09/2026). O primeiro envio se
-                                // perdia às vezes (óculos ainda acordando, SDK sem
-                                // resposta) e ninguém tentava de novo: a tela
-                                // ficava em "pendente" até o perito tocar no
-                                // botão. Passados 40 s sem Wi-Fi, reenvia sozinho.
                                 delay(40_000)
                                 if (conectado && !wifiOculos && wifiSsid.isNotBlank()) {
                                     status = "Óculos ainda sem Wi-Fi — reenviando a rede salva (${wifiSsid.trim()})..."
@@ -1415,8 +1368,7 @@ fun CaptureScreen() {
                     status = if (evento.conectado)
                         "Óculos na Wi-Fi ${evento.ssid ?: ""} ✓"
                     else "Óculos SEM Wi-Fi — a foto não chega ao servidor"
-                    // Os óculos avisaram que estão SEM rede depois de conectar
-                    // (desligaram e perderam a Wi-Fi): manda a salva, uma vez.
+                    // Os óculos avisaram que estão SEM rede depois de conectar (desligaram e perderam a Wi-Fi): manda a salva, uma vez.
                     if (!evento.conectado && conectado && wifiSsid.isNotBlank() && !wifiEnviadaNestaConexao) {
                         wifiEnviadaNestaConexao = true
                         status = "Óculos sem Wi-Fi — enviando a rede salva (${wifiSsid.trim()})..."
@@ -1431,10 +1383,7 @@ fun CaptureScreen() {
                 }
                 is GlassesEvent.Aviso -> status = evento.mensagem
                 is GlassesEvent.TranscricaoIndisponivel -> {
-                    // Os oculos ouvem mas nao transcrevem: assume o microfone
-                    // do celular, sem o perito precisar fazer nada. Com o
-                    // assistente IA ligado nao ha o que assumir — quem entende
-                    // o pedido do perito e o Gemini, pelo audio dos oculos.
+                    // Os oculos ouvem mas nao transcrevem: assume o microfone do celular, sem o perito precisar fazer nada.
                     if (ponteGemini == null) {
                         usarVozDoCelular = true
                         voz.iniciar()
@@ -1443,36 +1392,20 @@ fun CaptureScreen() {
                 }
                 is GlassesEvent.CapturaRemota -> {
                     // Os oculos subiram o JPEG direto ao webhook; o backend selou.
-                    // So agora, com a confirmacao real (onPhotoResponse), falamos
-                    // "foto capturada" — falar antes disso poderia mentir sobre
-                    // uma captura que na verdade falhou.
                     if (evento.fotoDeVerdade) {
                         fotosEnviadas++
                         status = "Foto $fotosEnviadas enviada ao backend ✓"
-                        // Pede a descrição EM VOZ, pelos óculos (se pareados como
-                        // áudio Bluetooth; senão, pelo celular). A próxima fala do
-                        // perito vira a legenda desta foto — o backend ancora o
-                        // primeiro trecho posterior ao pedido da captura.
+                        // Pede a descrição EM VOZ, pelos óculos (se pareados como áudio Bluetooth; senão, pelo celular).
                         falarSeSemIa("Foto capturada. Descreva a evidência.")
                     } else {
-                        // MARCA no vídeo, não foto. Conta separado e diz a verdade:
-                        // esta imagem só existe se o servidor conseguir recortar o
-                        // quadro no fim (campo 08/09/2026: o perito achou que tinha
-                        // duas fotos e o laudo saiu com zero).
+                        // MARCA no vídeo, não foto.
                         quadrosMarcados++
                         status = "Quadro $quadrosMarcados MARCADO no vídeo — não é foto; o servidor tenta recortar no fim"
                         falarSeSemIa("Não consegui a foto. Marquei o quadro no vídeo. Descreva a evidência.")
                     }
                 }
                 is GlassesEvent.FotoRecusada -> {
-                    // Os óculos não fotografam enquanto transmitem ("Camera busy
-                    // with streaming"). Esperar não adianta — e foi esperando que
-                    // a perícia de 09/09/2026 acabou com ZERO foto. Quem tem a
-                    // imagem agora é o tablet, que recebe o vídeo: recorta o quadro
-                    // do visor neste instante e sobe como a captura desta
-                    // autorização, marcado como quadro do vídeo. Só cai na marca
-                    // para o servidor recortar no fim quando o visor não está na
-                    // tela (modo servidor).
+                    // Os óculos não fotografam enquanto transmitem ("Camera busy with streaming").
                     val id = sessaoId
                     val jpeg = if (id != null) quadroDoVisor() else null
                     if (id == null || jpeg == null) {
@@ -1482,9 +1415,7 @@ fun CaptureScreen() {
                         falarSeSemIa("Não consegui a foto. Marquei o quadro no vídeo. Descreva a evidência.")
                     } else {
                         if (custodia.credencial(evento.requestId, id) == null) {
-                            // Foto que ia direto ao servidor: a credencial não passou
-                            // pela custódia. Guarda agora, para o repasse (e a
-                            // retentativa a cada 30 s) funcionar igual ao caminho do tablet.
+                            // Foto que ia direto ao servidor: a credencial não passou pela custódia.
                             custodia.guardar(
                                 br.com.facilmova.peritavision.custodia.CustodiaDeFotos.Credencial(
                                     sessaoId = id, requestId = evento.requestId,
@@ -1515,8 +1446,7 @@ fun CaptureScreen() {
                     }
                 }
                 is GlassesEvent.ArquivoCapturado -> {
-                    // Modo PHONE: o arquivo esta no celular. Sela localmente e,
-                    // se houver sessao aberta, sobe para o backend tambem.
+                    // Modo PHONE: o arquivo esta no celular.
                     status = "Selando custódia..."
                     val ev = withContext(Dispatchers.IO) {
                         selar.selar(evento.tipo, evento.arquivo, protocolo.trim().ifBlank { null })
@@ -1547,19 +1477,12 @@ fun CaptureScreen() {
 
     // Comando de voz pelos MICROFONES DOS OCULOS (transcricao local, sem nuvem).
     LaunchedEffect(device, ponteGemini) {
-        // Com o assistente IA ligado, QUEM manda é o Gemini (função
-        // capturar_foto). O reconhecedor de palavras soltas fica só como
-        // reserva para quando a IA está desligada — dois donos do mesmo
-        // comando tiravam foto em dobro e a IA disparava captura ao dizer
-        // "fotografe" no meio de uma frase.
+        // Com o assistente IA ligado, QUEM manda é o Gemini (função capturar_foto).
         (device as? MentraGlassesDevice)?.onComandoVoz =
             if (ponteGemini != null) null else ({ device.capturarFoto() })
     }
 
-    /**
-     * Liga/desliga a escuta. Prefere o microfone DOS OCULOS (caminho oficial:
-     * 3 mics, o perito nao precisa segurar o celular). Se os oculos ja tiverem
-     */
+    /** Liga/desliga a escuta. */
     fun alternarComandoDeVoz() {
         val mentra = device as? MentraGlassesDevice
         val usarOculos = mentra != null && conectado && !usarVozDoCelular
@@ -1573,20 +1496,9 @@ fun CaptureScreen() {
         }
     }
 
-    /**
-     * Escuta CONTINUA enquanto a sessao estiver aberta.
-     * O microfone fica ligado do inicio ao fim da sessao, mas o app so AGE ao
-     */
+    /** Escuta CONTINUA enquanto a sessao estiver aberta. */
     LaunchedEffect(sessaoId, conectado, usarVozDoCelular, ponteGemini) {
         val mentra = device as? MentraGlassesDevice
-        // CUIDADO: iniciarComandoDeVoz() é o que LIGA O MICROFONE dos óculos —
-        // é dele que sai o PCM que alimenta o assistente IA e a custódia.
-        // Desligar a escuta com a IA ativa deixava a IA SURDA (perito falava
-        // e nada acontecia). Então: com óculos, o microfone fica ligado sempre
-        // que há sessão — quem foi desligado com a IA é só a AÇÃO offline
-        // (onComandoVoz = null, ASR ignorado). Já o reconhecedor do CELULAR
-        // (Vosk) não alimenta a IA, só dispara comando — esse sim fica de
-        // reserva, ligado apenas com a IA desligada.
         val pelosOculosPossivel = mentra != null && !usarVozDoCelular
         val deveEscutar = sessaoId != null &&
             (if (pelosOculosPossivel) conectado else ponteGemini == null)
@@ -1600,16 +1512,7 @@ fun CaptureScreen() {
         }
     }
 
-    /**
-     * ÁUDIO DOS ÓCULOS → BACKEND → COMANDO.
-     * Este é o caminho oficial da arquitetura. Os óculos entregam PCM por
-     */
-    // ── Funções de bancada pedidas pelo assistente IA ──────────────────────
-    // O Gemini NÃO executa nada: ele pede, o app executa (o MESMO código dos
-    // comandos de voz offline — mesma captura selada, mesma cadeia de
-    // custódia) e devolve o resultado, que o assistente confirma por voz.
-    // Fica aqui (e não em ligarAssistenteIa) porque finalizarSessao é
-    // declarada acima e função local não enxerga declaração abaixo dela.
+    /** ÁUDIO DOS ÓCULOS → BACKEND → COMANDO. */
     LaunchedEffect(ponteGemini) {
         ponteGemini?.onComando = { id, nome, args ->
             when (nome) {
@@ -1623,9 +1526,6 @@ fun CaptureScreen() {
                     when {
                         sessaoId == null ->
                             ponteGemini?.responderComando(id, nome, false, "captura indisponível (sessão não aberta)")
-                        // O comando offline acabou de fotografar a mesma cena
-                        // (a frase do perito continha "capturar"/"foto"):
-                        // confirma sem duplicar a evidência.
                         agora - ultimaCapturaMs < 6_000 ->
                             ponteGemini?.responderComando(id, nome, true, "a foto já foi capturada agora mesmo pelo comando de voz; não repita")
                         else -> {
@@ -1636,12 +1536,7 @@ fun CaptureScreen() {
                     }
                 }
                 "finalizar_sessao" -> {
-                    // DOIS TEMPOS, TRAVADO EM CÓDIGO. A regra de confirmação no
-                    // prompt não bastou: em teste real a IA encerrou a perícia
-                    // sozinha no meio de uma resposta, e encerrar é irreversível
-                    // (fecha a sessão e dispara o laudo). Agora a PRIMEIRA
-                    // chamada nunca encerra — só manda ela perguntar. Só a
-                    // segunda, dentro de 2 minutos, executa.
+                    // DOIS TEMPOS, TRAVADO EM CÓDIGO.
                     val agora = System.currentTimeMillis()
                     if (agora - pedidoFinalizarMs > 120_000L) {
                         pedidoFinalizarMs = agora
@@ -1656,8 +1551,6 @@ fun CaptureScreen() {
                         )
                     } else {
                         pedidoFinalizarMs = 0L
-                        // Responde SO com o resultado real (campo 04/09: a IA
-                        // anunciava encerramento e a tela ficava na bancada).
                         finalizarSessao { ok, detalhe ->
                             ponteGemini?.responderComando(id, nome, ok, detalhe)
                         }
@@ -1668,11 +1561,6 @@ fun CaptureScreen() {
         }
     }
 
-    // Liga o vídeo dos óculos assim que a sessão abre e os óculos estão prontos.
-    // iaModo entra nas chaves: em PAUSA o vídeo fica desligado (ver efeito
-    // abaixo) e, quando o perito diz a palavra de volta, este efeito roda de
-    // novo e religa o stream — o servidor abre outro segmento .flv e a
-    // consolidação junta tudo; o trecho da pausa simplesmente não existe.
     var estavaPausado by remember { mutableStateOf(false) }
     LaunchedEffect(sessaoId, conectado, urlDoStream, gravacaoPausada) {
         val url = urlDoStream
@@ -1693,11 +1581,6 @@ fun CaptureScreen() {
         estavaPausado = gravacaoPausada
     }
 
-    // PAUSA de verdade (campo 04/09: "pausa" só calava a IA e o vídeo seguia
-    // gravando tudo — o arquivo ficava enorme e o que o perito falava no
-    // intervalo ia junto). Agora a pausa CORTA o stream dos óculos; o áudio ao
-    // backend também para (abaixo, em onPcm). Só a ponte segue ouvindo, para
-    // reconhecer a palavra de volta — e ela descarta a transcrição em pausa.
     LaunchedEffect(gravacaoPausada) {
         if (!gravacaoPausada) return@LaunchedEffect
         val id = sessaoId ?: return@LaunchedEffect
@@ -1721,17 +1604,11 @@ fun CaptureScreen() {
         }
         val streamer = AudioStreamer(enderecoBackend.trim(), jwt, id).apply {
             onStatus = { msg ->
-                // Com o assistente IA ativo o ASR do backend não é mais usado
-                // para comando nenhum (o áudio segue subindo só por custódia),
-                // então o alerta dele viraria barulho na tela do perito.
                 val avisoDoAsr = msg.startsWith("Serviço de voz indisponível")
                 if (!(avisoDoAsr && ponteGemini != null)) status = msg
             }
             onComando = { intencao, ouvido ->
-                // Terceiro caminho offline (ASR do backend). Mesma regra: com
-                // o assistente ligado, o dono do comando e o Gemini. O audio
-                // CONTINUA subindo ao backend (custodia da sessao) — so a acao
-                // automatica sobre ele e que fica suspensa.
+                // Terceiro caminho offline (ASR do backend).
                 if (ponteGemini == null) {
                     status = "Comando \"$ouvido\" → $intencao"
                     when (intencao) {
@@ -1748,19 +1625,13 @@ fun CaptureScreen() {
         streamer.conectar()
         audioStreamer = streamer
         // Cada frame do microfone dos óculos segue direto para o servidor.
-        // Caminho oficial (offline) + cópia opcional para o assistente IA.
         mentra.onPcm = { pcm, _ ->
-            // Meia-duplex: enquanto o assistente fala pelo alto-falante dos
-            // óculos, o microfone capta a própria voz da IA. Sem este bloqueio,
-            // a IA se ouve (fala sem parar) e um "fotografe" dito por ela
-            // dispara o comando de captura no Vosk. Silenciamos os DOIS
-            // caminhos (offline e IA) durante a fala + cauda de 400 ms.
+            // Meia-duplex: enquanto o assistente fala pelo alto-falante dos óculos, o microfone capta a própria voz da IA.
             val iaFalando = ponteGemini?.estaFalando() == true
             if (!iaFalando) {
-                // Em PAUSA nada do que é dito sobe ao servidor (custódia/narração);
-                // a ponte continua ouvindo só para pegar a palavra de volta.
                 if (!gravacaoPausada) streamer.enviarPcm(pcm)
                 ponteGemini?.enviarPcm(pcm)
+                canalAssistido?.enviarPcm(pcm)
             }
         }
     }
@@ -1773,10 +1644,6 @@ fun CaptureScreen() {
             audioStreamer?.encerrar()
             (device as? MentraGlassesDevice)?.let { it.onPcm = null; it.pararComandoDeVoz() }
             device.encerrar()
-            // Sem isto, girar o tablet deixava o ServerSocket e a thread do
-            // receptor presos na porta: a instância nova caía na porta
-            // seguinte e, depois de algumas recriações, não achava porta
-            // nenhuma — as fotos voltavam ao webhook público em silêncio.
             runCatching { receptorFotos.desligar() }
             runCatching { receptor.desligar() }
             runCatching { decodificador.encerrar() }
@@ -1794,11 +1661,7 @@ fun CaptureScreen() {
             is MentraGlassesDevice -> {
                 conectando = true
                 status = "Procurando óculos..."
-                // O SDK da Mentra LANÇA exceção se o Bluetooth do aparelho
-                // estiver desligado ("Turn on phone Bluetooth to scan..."). Sem
-                // este catch a exceção subia pela coroutine e DERRUBAVA o app —
-                // era crash, não aviso. Bluetooth desligado é situação normal de
-                // bancada; o app avisa e espera, não morre.
+                // O SDK da Mentra LANÇA exceção se o Bluetooth do aparelho estiver desligado ("Turn on phone Bluetooth to scan...").
                 try {
                     d.conectar()
                 } catch (e: Exception) {
@@ -1810,17 +1673,11 @@ fun CaptureScreen() {
         }
     }
 
-    // Conecta SOZINHO assim que a tela abre e as permissões estão prontas —
-    // não precisa mais tocar em "CONECTAR ÓCULOS" toda vez que abrir o app.
-    // Só tenta uma vez por abertura de tela (LaunchedEffect(temPermissoes) não
-    // reexecuta à toa; o retry automático de rede já mora no MentraGlassesDevice).
     LaunchedEffect(temPermissoes) {
         if (temPermissoes && ehMentra && !conectado && !conectando) conectarOculos()
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    //  A PARTIR DAQUI É SÓ APRESENTAÇÃO. Nenhuma regra de negócio abaixo.
-    // ══════════════════════════════════════════════════════════════════════
+    // A PARTIR DAQUI É SÓ APRESENTAÇÃO.
 
     val temSessao = sessaoId != null
     val ouvindoPelosOculos = vozAtiva && ehMentra && conectado && !usarVozDoCelular
@@ -1832,8 +1689,6 @@ fun CaptureScreen() {
         else -> Passo.CAPTURAR
     }
 
-    // Por que a captura não está liberada — dito na tela, não deixado para o
-    // perito adivinhar olhando um botão cinza.
     val motivoBloqueio = when {
         podeCapturar -> null
         ehMentra && !conectado -> "Conecte os óculos para liberar a captura."
@@ -1841,9 +1696,7 @@ fun CaptureScreen() {
         else -> "Abra a perícia no passo 3 — a foto precisa de um token emitido pelo servidor."
     }
 
-    // Tom da barra de status. Derivado da própria mensagem, de propósito: um
-    // segundo estado "tomDoStatus" para manter em sincronia com o texto seria
-    // uma fonte de bug silencioso a cada mensagem nova.
+    // Tom da barra de status.
     val tomStatus = when {
         status.startsWith("Erro") || status.startsWith("Falha") || status.contains("SEM Wi-Fi") -> Tom.ERRO
         status.contains("✓") || status.contains("selada") || status.contains("aberta") ||
@@ -1871,9 +1724,6 @@ fun CaptureScreen() {
         add(Prontidao("Sessão", if (temSessao) Tom.OK else Tom.ERRO))
     }
 
-    // Modo de teste (PHONE): a pré-visualização da câmera do celular entra DENTRO
-    // do cartão de captura, em vez de ser o fundo da tela inteira. Antes ela
-    // ficava atrás dos cartões, ou seja, invisível justo quando servia de plano B.
     val phone = device as? PhoneGlassesDevice
     val previewCamera: (@Composable () -> Unit)? =
         if (phone != null && temPermissoes) {
@@ -1892,14 +1742,6 @@ fun CaptureScreen() {
             null
         }
 
-    // Cada cartão vira um "bloco pronto" — o layout de tablet abaixo decide
-    // onde cada um entra (preparação em 3 colunas / bancada em 2 painéis),
-    // sem duplicar nenhum parâmetro. Design aprovado em 24/08/2026.
-    // Numeração do checklist: Óculos → Wi-Fi → Perícia (no modo PHONE, sem
-    // óculos, são só dois passos: Câmera → Perícia).
-    // Desde 02/09/2026 óculos e Wi-Fi moram na aba Configurações (engrenagem):
-    // a tela principal tem UM passo, a perícia. O apoio do título diz o que
-    // ainda falta lá em Configurações para poder abrir.
     val numeroPericia = 1
     val apoioPreparo = when {
         ehMentra && !conectado -> "óculos desconectados — conecte em Configurações"
@@ -1927,6 +1769,7 @@ fun CaptureScreen() {
             wifiOculos = wifiOculos,
             ssidOculos = ssidOculos,
             ssid = wifiSsid,
+            redeDoTablet = redeDoTablet,
             onSsid = { wifiSsid = it; config.wifiSsid = it },
             senha = wifiSenha,
             onSenha = { wifiSenha = it; config.wifiSenha = it },
@@ -1943,9 +1786,7 @@ fun CaptureScreen() {
             destaque = passo == Passo.SESSAO,
             matricula = matricula,
             onMatricula = { matricula = it },
-            // Leitura de lacre agora é PELOS ÓCULOS (o scanner da câmera do
-            // tablet saiu). No modo PHONE (sem óculos), o leitor local continua
-            // como plano B de teste.
+            // Leitura de lacre agora é PELOS ÓCULOS (o scanner da câmera do tablet saiu).
             onLerLacre = {
                 if (ehMentra) lerLacrePelosOculos()
                 else LeitorCodigo.ler(
@@ -1975,17 +1816,12 @@ fun CaptureScreen() {
             podeCapturar = podeCapturar,
             motivoBloqueio = motivoBloqueio,
             fotosEnviadas = fotosEnviadas,
-            // Marca no vídeo vem de duas fontes: as do caminho do tablet, que a
-            // custódia conta e desfaz quando a foto atrasada chega, e as do
-            // caminho do webhook, que a tela ainda conta na mão.
             quadrosMarcados = quadrosMarcados + resumoFotos.marcadasNoVideo,
             fotosParadasNoTablet = resumoFotos.paradasNoTablet,
             rotaDaFoto = when {
                 !resumoFotos.usandoTablet -> "A foto vai direto ao servidor (o tablet não recebeu)."
                 receptorFotosEstado.ligado && receptorFotosEstado.recebidas > 0 ->
                     "A foto chega no tablet (${receptorFotosEstado.recebidas} até agora) e o tablet repassa ao servidor."
-                // Endereço e porta foram para o log (12/09/2026): na bancada o
-                // perito precisa saber o que está acontecendo, não o IP.
                 receptorFotosEstado.ligado && receptorFotosEstado.conexoes > 0 ->
                     "Os óculos acharam o tablet; aguardando a foto chegar."
                 receptorFotosEstado.ligado ->
@@ -2015,17 +1851,44 @@ fun CaptureScreen() {
             receptor = if (videoNoTablet) receptorEstado else null,
             perfil = (device as? MentraGlassesDevice)?.perfilVideo?.nome ?: "",
             subindo = segmentosSubindo, subidos = segmentosSubidos, comFalha = segmentosComFalha,
-            imagem = if (videoNoTablet) ({ VisorAoVivoDosOculos(decodificador) { visorAoVivo = it } }) else null,
+            imagem = if (videoNoTablet) ({ VisorComMarcacao(decodificador, marcacaoDaPerita) { visorAoVivo = it } }) else null,
             imagemEstado = if (videoNoTablet) decodificadorEstado else null,
+        )
+    }
+    val cartaoAssistida: @Composable () -> Unit = {
+        if (temSessao && ehMentra && videoNoTablet) CartaoPericiaAssistida(
+            ativa = canalAssistido != null,
+            codigo = codigoSalaAssistida,
+            peritaOnline = peritaOnline,
+            instrucao = instrucaoAssistida,
+            mudo = assistidaMudo,
+            status = assistidaStatus,
+            ocupado = ocupado,
+            onChamar = { abrirSalaAssistida() },
+            onFeito = {
+                instrucaoAssistida?.let { canalAssistido?.feito(it.id, true) }
+                instrucaoAssistida = null
+            },
+            onNaoConsigo = {
+                instrucaoAssistida?.let { canalAssistido?.feito(it.id, false) }
+                instrucaoAssistida = null
+            },
+            onSilenciar = {
+                assistidaMudo = !assistidaMudo
+                canalAssistido?.mudo = assistidaMudo
+            },
+            onEncerrar = {
+                val sid = sessaoId
+                encerrarSalaAssistida(avisarServidor = true)
+                if (sid != null) escopo.launch { runCatching { backend.encerrarAssistida(sid) } }
+                status = "Sala encerrada. O assistente de IA pode ser religado no cartão do assistente."
+            },
         )
     }
     // FOTOS DA PERÍCIA, embaixo do vídeo: miniaturas do que o servidor já tem.
     val cartaoFotos: @Composable () -> Unit = {
         if (temSessao) CartaoFotosDaPericia(
             fotos = fotosDaPericia,
-            // Só o que o app contou como FOTO: quadro marcado não está "subindo",
-            // ele só existe se o servidor recortar no fim — senão o placeholder
-            // ficaria na tela para sempre.
             esperando = (fotosEnviadas - fotosDaPericia.count { !it.doVideo }).coerceAtLeast(0) +
                 resumoFotos.aguardandoRede,
             onAmpliar = { fotoAmpliada = it },
@@ -2065,9 +1928,6 @@ fun CaptureScreen() {
             perguntandoTrilha = iaPerguntandoTrilha,
             modo = iaModo,
             onModo = { m ->
-                // Com a IA desligada os botões continuam valendo: senão o
-                // perito que desligou o assistente ficava sem NENHUMA forma
-                // de pausar a gravação (nem voz, nem toque).
                 if (ponteGemini != null) ponteGemini?.definirModo(m)
                 else { iaModo = m; gravacaoPausada = m == "pausa" }
             },
@@ -2084,8 +1944,6 @@ fun CaptureScreen() {
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // background ANTES do inset: a cor do cabeçalho sobe por baixo da barra
-        // de status, em vez de deixar uma faixa de outra cor lá em cima.
         Column(
             Modifier
                 .background(MaterialTheme.colorScheme.surface)
@@ -2093,8 +1951,7 @@ fun CaptureScreen() {
         ) {
             BarraDeTopo(
                 titulo = "PeritaVision",
-                // O nome do responsável na barra de topo: o perito confere de
-                // relance que a perícia é dele antes de começar a trabalhar.
+                // O nome do responsável na barra de topo: o perito confere de relance que a perícia é dele antes de começar a trabalhar.
                 subtitulo = if (temSessao) {
                     "Protocolo ${protocolo.trim()} · ${peritoDaSessao ?: "sessão aberta"}"
                 } else SLOGAN_APP,
@@ -2104,12 +1961,6 @@ fun CaptureScreen() {
         }
         FaixaProntidao(prontidao)
 
-        // ── LAYOUT EM COLUNA ÚNICA (redesenho 01/09/2026) ────────────────
-        // Sem sessão: PREPARAÇÃO — checklist numerado, um passo por vez
-        //   (óculos → Wi-Fi → perícia). Passo concluído recolhe numa linha
-        //   verde; passo ainda bloqueado fica esmaecido.
-        // Com sessão: BANCADA — visor ao vivo, captura selada, assistente,
-        //   custódia. Óculos e Wi-Fi ficam recolhidos no fim, ainda ao alcance.
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -2123,8 +1974,15 @@ fun CaptureScreen() {
                 TituloSecao("Antes de começar", apoioPreparo)
                 cartaoFichaLacre()
                 cartaoServidor()
+                CartaoEnviosPendentes(
+                    pendentes = enviosPendentes,
+                    enviando = enviando,
+                    progresso = progressoEnvio,
+                    onEnviar = { enviarPendentes("manual") },
+                )
                 cartaoEvidencia()
             } else {
+                cartaoAssistida()
                 cartaoVisao()
                 cartaoFotos()
                 cartaoCaptura()
@@ -2144,8 +2002,6 @@ fun CaptureScreen() {
             BarraDeStatus(status, tomStatus)
         }
     }
-    // Configurações POR CIMA da bancada (ver comentário do Box): a sessão, os
-    // efeitos e o assistente continuam vivos enquanto o perito mexe aqui.
     fotoAmpliada?.let { f ->
         FotoAmpliada(f, emAlta = bitmapAmpliado) { fotoAmpliada = null }
     }
@@ -2164,13 +2020,36 @@ fun CaptureScreen() {
             )
         }
     }
+    // Pergunta da PERÍCIA ANTERIOR: só aparece quando o servidor encontrou uma finalizada há pouco.
+    continuacaoPendente?.let { ant ->
+        val quando = dataLegivel(ant.finalizadaEm)?.let { "em $it" } ?: "há pouco"
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { continuacaoPendente = null },
+            title = { Text("Este protocolo já tem uma perícia sua") },
+            text = {
+                Text(
+                    "Finalizada $quando, com ${ant.fotosRecebidas} foto(s). " +
+                        "Continuar acrescenta ao MESMO laudo — para quando faltou uma foto ou um material. " +
+                        "Nova perícia começa do zero, com outro laudo.",
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { iniciarSessao("continuar") }) {
+                    Text("Continuar essa perícia")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { iniciarSessao("nova") }) {
+                    Text("Nova perícia")
+                }
+            },
+        )
+    }
     if (mostrarConfiguracoes) {
         TelaConfiguracoes(
             config = config,
             urlPonte = BuildConfig.PV_PONTE_URL,
             onVoltar = { mostrarConfiguracoes = false },
-            // Óculos e Wi-Fi: os mesmos cartões de antes, com o mesmo estado —
-            // só mudaram de tela. Conectar aqui reflete na faixa de prontidão.
             secaoOculos = {
                 cartaoOculos()
                 cartaoWifi()
@@ -2179,19 +2058,3 @@ fun CaptureScreen() {
     }
     }
 }
-
-// ══════════════════════════════════════════════════════════════════════════
-//  OS CARTÕES DA TELA MORAM EM OUTROS ARQUIVOS (08/09/2026)
-//
-//  CartoesDeHardware.kt — óculos, Wi-Fi dos óculos, servidor de vídeo e o
-//                         visor com a imagem ao vivo do tablet.
-//  CartoesDeCaptura.kt  — botão de captura, galeria de fotos da perícia,
-//                         foto em tela cheia e evidências seladas.
-//  CartoesDoLaudo.kt    — laudo em preenchimento, ficha do lacre e o estado
-//                         do assistente de IA.
-//
-//  Cada cartão é só apresentação: recebe estado, devolve toques. Estão no
-//  mesmo pacote, por isso `internal` e não `private` — em Kotlin `private`
-//  vale só dentro do arquivo.
-// ══════════════════════════════════════════════════════════════════════════
-

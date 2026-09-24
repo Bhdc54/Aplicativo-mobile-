@@ -13,15 +13,9 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-/*
- * TEMA — claro e escuro, seguindo o celular.
- * Duas coisas estavam erradas antes e foram corrigidas aqui:
- */
+/** TEMA — claro e escuro, seguindo o celular. */
 
-/**
- * Cores que o Material 3 não tem slot para: "sucesso" e "atenção".
- * O esquema do Material só oferece primary/secondary/tertiary/error. Sucesso e
- */
+/** Cores que o Material 3 não tem slot para: "sucesso" e "atenção". */
 @Immutable
 data class CoresExtras(
     val sucesso: Color,
@@ -130,7 +124,7 @@ private val EsquemaEscuro = darkColorScheme(
     scrim = Color.Black,
 )
 
-/** Cantos: nada quadrado, nada de bolha. 10/14/18 dp é o suficiente. */
+/** Cantos: nada quadrado, nada de bolha. */
 private val FormasPv = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(10.dp),
@@ -141,12 +135,6 @@ private val FormasPv = Shapes(
 
 @Composable
 fun PeritavisionTheme(
-    // TEMA CLARO SEMPRE (24/08/2026): o app nao segue mais o modo escuro do
-    // celular/tablet — bancada pede fundo branco e a cor semantica (verde=ok,
-    // ambar=atencao, vermelho=falhou) fica mais legivel sobre claro. O esquema
-    // escuro continua definido acima; para voltar a seguir o sistema, troque o
-    // default por isSystemInDarkTheme() (e reimporte
-    // androidx.compose.foundation.isSystemInDarkTheme).
     temaEscuro: Boolean = false,
     content: @Composable () -> Unit,
 ) {

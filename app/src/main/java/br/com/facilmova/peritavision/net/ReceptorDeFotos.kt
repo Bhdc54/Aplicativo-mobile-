@@ -1,24 +1,3 @@
-// RECEPTOR LOCAL DAS FOTOS DOS ÓCULOS (08/09/2026).
-//
-// Até aqui o JPEG saía dos óculos por Wi-Fi DIRETO para o webhook do backend,
-// que mora na internet. A evidência dependia, portanto, de os óculos alcançarem
-// um endereço público a partir da rede da bancada — e no teste de campo de
-// 08/09/2026 foi exatamente isso que quebrou: o vídeo chegou inteiro ao tablet
-// (RTMP local, mesma Wi-Fi) e as duas fotos simplesmente não existiam no
-// servidor. Os óculos avisaram "foto pronta", o app contou duas, e o laudo saiu
-// com ZERO imagem.
-//
-// Agora a foto faz o mesmo caminho do vídeo: os óculos entregam ao TABLET, que
-// está na mesma rede e sempre responde. O tablet grava o arquivo, mostra a
-// miniatura na bancada na hora e repassa ao servidor com repetição — se a
-// internet oscilar, a foto espera no tablet em vez de se perder.
-//
-// De quebra, é aqui que se descobre o que os óculos mandam de verdade: cada
-// envio entra no log com método, content-type, tamanho e o campo do multipart.
-//
-// PRINCÍPIO desta classe: é melhor RECUSAR um envio do que selar na cadeia de
-// custódia um arquivo truncado. Toda leitura incompleta devolve erro; nada de
-// gravar "o que deu" e responder 201.
 package br.com.facilmova.peritavision.net
 
 import android.util.Log
@@ -49,14 +28,7 @@ class ReceptorDeFotos(
         val mime: String,
     )
 
-    /**
-     * O que a tela precisa saber para diagnosticar sem logcat.
-     *
-     * A pergunta do teste de campo é sempre a mesma: os óculos CHEGARAM na
-     * porta? Se ninguém abriu TCP, o problema é o endereço ou a rede, e não o
-     * formato do envio — e essa diferença muda o que se conserta. É a mesma
-     * pista que o receptor de vídeo já dá com `ultimoCliente`.
-     */
+    /** O que a tela precisa saber para diagnosticar sem logcat. */
     data class Estado(
         val ligado: Boolean = false,
         val ip: String? = null,
@@ -82,19 +54,9 @@ class ReceptorDeFotos(
 
     /** Chamado em thread de rede quando um arquivo completo chega. */
     var aoReceber: ((Recebida) -> Unit)? = null
-    /** Chamado quando alguém bateu na porta e o corpo não deu foto — o texto já
-     *  vem pronto para a tela, porque é a pista do que os óculos mandaram. */
     var aoEstranhar: ((String) -> Unit)? = null
 
-    /**
-     * QUEM pode depositar uma foto. Devolve true se o requestId é de uma
-     * captura que o app está esperando (e o token, quando vier, casa com o da
-     * autorização). Sem isto o receptor aceitaria um POST de qualquer aparelho
-     * da rede: como o arquivo tem o nome do requestId e a credencial é de uso
-     * único, um envio forjado SUBSTITUIRIA a foto do perito na custódia. O
-     * requestId é um uuid que o servidor sorteia, então exigir que ele seja
-     * conhecido já fecha a porta na prática.
-     */
+    /** QUEM pode depositar uma foto. */
     var autorizacaoValida: ((requestId: String, token: String?) -> Boolean)? = null
 
     @Volatile private var servidor: ServerSocket? = null
@@ -107,11 +69,7 @@ class ReceptorDeFotos(
 
     val ligado: Boolean get() = servidor != null
 
-    /**
-     * Sobe o servidor no IP informado (o mesmo que o receptor de vídeo achou na
-     * Wi-Fi). Tenta cinco portas a partir de [porta]. Devolve o erro em texto,
-     * ou null se subiu.
-     */
+    /** Sobe o servidor no IP informado (o mesmo que o receptor de vídeo achou na Wi-Fi). */
     fun ligar(ip: String, porta: Int = PORTA_PADRAO): String? {
         if (servidor != null) return null
         custodia.pasta.mkdirs()
@@ -157,18 +115,13 @@ class ReceptorDeFotos(
         return "http://$endereco:$portaEmUso/foto/$requestId"
     }
 
-    // ------------------------------------------------------------------------
     // Servidor HTTP mínimo (só o que os óculos usam: um POST com um arquivo)
-    // ------------------------------------------------------------------------
 
     private fun aceitar(s: ServerSocket) {
         while (servidor === s && !s.isClosed) {
             val cliente = try {
                 s.accept()
             } catch (e: IOException) {
-                // Erro transitório do accept NÃO pode matar o laço: se matasse,
-                // `ligado` continuaria dizendo que está de pé e as fotos
-                // sumiriam em silêncio pelo resto da perícia.
                 if (servidor !== s || s.isClosed) return
                 Log.w(TAG, "accept: ${e.message}")
                 continue
@@ -203,8 +156,6 @@ class ReceptorDeFotos(
                 if (i <= 0) null else l.substring(0, i).trim().lowercase() to l.substring(i + 1).trim()
             }.toMap()
 
-            // Sondagem de porta: responde o mínimo, sem dizer o que é (não há
-            // motivo para entregar a identificação do app a quem varre a rede).
             if (metodo == "GET" || metodo == "HEAD" || metodo == "OPTIONS") {
                 responder(cliente, 200, "ok")
                 return
@@ -223,8 +174,6 @@ class ReceptorDeFotos(
                 return
             }
 
-            // `Expect: 100-continue`: sem esta resposta o cliente espera o
-            // sinal, o servidor espera o corpo, e a foto morre no tempo limite.
             if (cabecalhos["expect"]?.contains("100-continue", true) == true) {
                 cliente.getOutputStream().apply {
                     write("HTTP/1.1 100 Continue\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
@@ -263,8 +212,7 @@ class ReceptorDeFotos(
                 return
             }
             val (bytes, mime) = achado
-            // Não sobrescreve: a primeira foto selada para esta captura é a que
-            // vale. Um segundo envio para o mesmo requestId é recusado.
+            // Não sobrescreve: a primeira foto selada para esta captura é a que vale.
             if (custodia.jaTemFoto(requestId)) {
                 Log.w(TAG, "envio duplicado para $requestId — recusado")
                 responder(cliente, 409, "esta captura ja tem foto")
@@ -311,9 +259,7 @@ class ReceptorDeFotos(
         }
     }
 
-    // ------------------------------------------------------------------------
     // Leitura do corpo
-    // ------------------------------------------------------------------------
 
     /** Bytes até o "\r\n\r\n" que fecha o cabeçalho (inclusive). */
     private fun lerCabecalho(e: InputStream): ByteArray? {
@@ -382,25 +328,12 @@ class ReceptorDeFotos(
         return if (buf.size() == 0) null else buf.toByteArray()
     }
 
-    // ------------------------------------------------------------------------
     // Onde está a imagem no corpo
-    // ------------------------------------------------------------------------
 
-    /**
-     * Acha o JPEG/PNG dentro do que chegou. Tolerante de propósito: não temos
-     * contrato escrito do que o firmware dos óculos manda, e perder a foto de
-     * uma perícia por causa do nome de um campo de formulário é inaceitável.
-     * Aceita multipart (qualquer campo que traga arquivo), corpo cru com
-     * content-type de imagem, e corpo cru sem pista mas com assinatura de
-     * imagem. Devolve (bytes, mime) ou null.
-     */
+    /** Acha o JPEG/PNG dentro do que chegou. */
     private fun imagemDoCorpo(corpo: ByteArray, contentType: String): Pair<ByteArray, String>? {
         val ct = contentType.lowercase()
         if (ct.startsWith("multipart/")) {
-            // Boundary é SENSÍVEL A CAIXA: tirado do cabeçalho original, não do
-            // minúsculo (o `----WebKitFormBoundaryAbC` de muitos clientes não
-            // casaria, e o corpo inteiro — com boundaries e tudo — seria selado
-            // como se fosse o JPEG).
             val limite = Regex("boundary=\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
                 .find(contentType)?.groupValues?.get(1)?.trim()
             if (!limite.isNullOrEmpty()) {
@@ -424,10 +357,7 @@ class ReceptorDeFotos(
             val fimCabecalho = indiceDe(corpo, SEPARADOR, depois)
             if (fimCabecalho < 0) break
             val proximo = indiceDe(corpo, marca, fimCabecalho + SEPARADOR.size)
-            // O CRLF antes do próximo limite pertence ao protocolo, não ao
-            // arquivo. Quando o limite seguinte NÃO existe (corpo cortado), não
-            // há CRLF para tirar — e tirar dois bytes aqui decepava o FF D9 do
-            // fim do JPEG.
+            // O CRLF antes do próximo limite pertence ao protocolo, não ao arquivo.
             val fimConteudo = if (proximo < 0) corpo.size else proximo - 2
             if (fimConteudo <= fimCabecalho + SEPARADOR.size) { pos = proximo; continue }
             val cabecalho = String(corpo, depois, fimCabecalho - depois, Charsets.ISO_8859_1).lowercase()
@@ -436,7 +366,6 @@ class ReceptorDeFotos(
             val ehArquivo = cabecalho.contains("filename=") || (mime?.startsWith("image/") == true)
             if (ehArquivo || assinatura(conteudo) != null) {
                 val achado = conteudo to (assinatura(conteudo) ?: mime ?: "image/jpeg")
-                // "photo" é o campo combinado com o backend: se vier, é o eleito.
                 if (cabecalho.contains("name=\"photo\"")) return achado
                 val atual = candidato
                 if (atual == null || conteudo.size > atual.first.size) candidato = achado

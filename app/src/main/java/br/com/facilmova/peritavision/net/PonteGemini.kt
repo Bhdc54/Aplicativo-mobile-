@@ -14,35 +14,10 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
+import br.com.facilmova.peritavision.BuildConfig
 import br.com.facilmova.peritavision.data.CatalogoPonte
 import br.com.facilmova.peritavision.data.TrilhaCatalogo
 
-/**
- * PONTE DE BANCADA COM O GEMINI LIVE — protótipo da Frente 5 do roadmap.
- *
- * Fala com o servidor-continuo.mjs (pasta ponte-gemini-live, roda no PC da
- * bancada) pelo protocolo combinado lá:
- *   → texto JSON  {"tipo":"iniciar","sessaoId":...}   abre a sessão
- *   → binário     0x01 + PCM16/16kHz                  áudio do perito
- *   ← texto JSON  {"tipo":"transcricaoEntrada"|"textoResposta"|"pronto"|"erro"}
- *   ← binário     0x03 + PCM16/24kHz                  voz de resposta do Gemini
- *
- * A voz de resposta toca num AudioTrack em modo stream — se os óculos estiverem
- * pareados como áudio Bluetooth, o Android roteia para o alto-falante deles,
- * igual já acontece com o FeedbackDeVoz.
- *
- * ── CUSTÓDIA (leia antes de ligar em caso real) ─────────────────────────────
- * Com a ponte ATIVA, uma cópia do áudio do microfone dos óculos sai do
- * circuito local e vai aos servidores do Google (é a natureza do Gemini Live).
- * O caminho oficial (reconhecimento offline na máquina da POLITEC) continua
- * funcionando em paralelo e não é alterado. Desde 27/08/2026 a ponte liga
- * AUTOMATICAMENTE quando a sessão de bancada abre (pedido do Brunno: "no
- * óculos tem que funcionar no automático") — o perito ainda pode desligar
- * pelo cartão, e o desligamento manual vale até a próxima sessão. Continua
- * NÃO devendo ser usada em caso real até a decisão de custódia estar
- * documentada com a POLITEC (ROADMAP_ALIQUOTAGEM.md, "Custódia e
- * conformidade").
- */
 class PonteGemini(
     private val url: String,
     private val sessaoId: String,
@@ -68,10 +43,6 @@ class PonteGemini(
     /** Modo atual (o cartão mostra; em pausa o PCM continua indo — é a ponte quem descarta). */
     @Volatile var modo: String = "conversa"
         private set
-    /** Diagnóstico da SAÍDA DE VOZ, em texto curto para o cartão: por onde o
-     *  som está saindo (óculos? alto-falante do tablet?), quantos trechos
-     *  tocaram, erro de AudioTrack. Nasceu do teste de campo de 02/09: a IA
-     *  "escrevia mas não falava" e não havia como saber onde o som morria. */
     var onVoz: (String) -> Unit = {}
     var onResposta: (String) -> Unit = {}
     var onStatus: (String) -> Unit = {}
@@ -80,27 +51,14 @@ class PonteGemini(
     var onVideoAtivo: () -> Unit = {}
     /** Janela de visão abriu/fechou: a IA só OLHA quando o perito pede. */
     var onVisao: (Boolean) -> Unit = {}
-    /** O Gemini pediu uma função de bancada (capturar_foto, finalizar_sessao,
-     *  controlar_tela). Quem executa é o app; responda com responderComando(id, nome, ...).
-     *  `argumentos` são os parâmetros da função (ex.: {"acao":"apagar"}). */
     var onComando: (id: String, nome: String, argumentos: JSONObject) -> Unit = { _, _, _ -> }
 
     @Volatile private var pronto = false
     /** true depois de encerrar(): a reconexão automática para de tentar. */
     @Volatile private var encerrado = false
-    /** Até quando a voz do assistente está tocando no alto-falante (ms epoch).
-     *  Base do HALF-DUPLEX anti-eco: enquanto ele fala, o microfone fica
-     *  surdo — sem isto a voz dele voltava pelo mic dos óculos, ele se ouvia
-     *  e não parava de falar; e o "fotografe" falado por ele disparava o
-     *  comando de captura offline. */
+    /** Até quando a voz do assistente está tocando no alto-falante (ms epoch). */
     @Volatile private var falandoAteMs = 0L
-    // A janela é esticada pela THREAD DE VOZ, a cada trecho que ela escreve —
-    // não pela chegada. O Gemini entrega dezenas de segundos de áudio em
-    // poucos segundos: prever pela chegada põe a janela no futuro, e se a
-    // reprodução parar (track morto, fila limpa na troca de modo, socket
-    // caído) o microfone nunca reabre — a IA fala a abertura e emudece para
-    // sempre, porque nada do que o perito diz chega ao Gemini. Amarrada à
-    // reprodução, a janela expira sozinha em um trecho (campo 08/09/2026).
+    // A janela é esticada pela THREAD DE VOZ, a cada trecho que ela escreve — não pela chegada.
     /** Guardados até o "pronto" (e reenviados após reconexão automática). */
     @Volatile private var urlVideo: String? = null
     @Volatile private var contextoCaso: String? = null
@@ -129,27 +87,17 @@ class PonteGemini(
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build(),
             )
-            // Buffer de pelo menos 1 s de som (15/09/2026). Com minimo*4 (~0,3 s)
-            // qualquer soluço de rede entre a ponte e o tablet esvaziava o
-            // buffer e a voz saía picada — "fala e corta". Um segundo de folga
-            // absorve o soluço; a janela do microfone não muda, porque ela é
-            // somada pela duração do que foi escrito, não pelo tamanho do buffer.
             .setBufferSizeInBytes(maxOf(minimo * 4, 24_000 * 2))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
             .also { it.play() }
     }
 
-    /** Fim previsto do som já escrito no alto-falante (só a thread de voz
-     *  mexe). É por ele que se sabe onde uma fala termina e outra começa
-     *  (silêncio > 1,2 s DEPOIS de o som acabar, não depois do último write). */
+    /** Fim previsto do som já escrito no alto-falante (só a thread de voz mexe). */
     @Volatile private var fimDoSomMs = 0L
     private var trechosDaFala = 0
 
-    /** FILA + THREAD PRÓPRIA para a voz. O write do AudioTrack é bloqueante
-     *  (espera o som escoar pelo Bluetooth); rodando na thread do OkHttp ele
-     *  segurava a leitura do WebSocket por segundos — e uma rota A2DP lenta
-     *  virava atraso e perda de mensagens. Agora o socket só enfileira. */
+    /** FILA + THREAD PRÓPRIA para a voz. */
     private val filaVoz = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
     /** Som na fila, em bytes (PCM16 24 kHz): o teto da fila é em segundos. */
     private val bytesNaFila = java.util.concurrent.atomic.AtomicLong(0)
@@ -161,15 +109,9 @@ class PonteGemini(
                 val pcm = filaVoz.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
                 bytesNaFila.addAndGet(-pcm.size.toLong())
                 val agora = System.currentTimeMillis()
-                // FALA NOVA = o som anterior já terminou de sair há mais de
-                // 1,2 s. Antes media-se pelo último write, e com buffer maior
-                // um write pode acontecer com 1 s de som ainda por tocar: a
-                // saída seria recriada no meio da frase — cortando-a.
+                // FALA NOVA = o som anterior já terminou de sair há mais de 1,2 s.
                 val novaFala = agora - fimDoSomMs > 1_200L
                 if (novaFala) {
-                    // Pré-carga: espera um instante para juntar mais trechos
-                    // antes do primeiro write, para a frase não começar com
-                    // o buffer no osso e picotar se a rede soluçar.
                     var esperou = 0
                     while (filaVoz.size < 2 && esperou < 300 && !encerrado) { Thread.sleep(50); esperou += 50 }
                 }
@@ -193,27 +135,10 @@ class PonteGemini(
         } else "rota n/d"
     }.getOrDefault("rota ?")
 
-    /** Escreve no AudioTrack mantendo a saída VIVA entre uma fala e outra.
-     *
-     *  Sintoma que isto resolve: depois de 3-4 respostas, a IA continuava
-     *  escrevendo no tablet mas não saía voz nenhuma nos óculos — justamente
-     *  quando o perito pergunta "o que eu tenho na mão", que é o uso real.
-     *
-     *  São TRÊS falhas diferentes, todas silenciosas, tratadas aqui:
-     *   1. O track morre quando a rota Bluetooth pisca (ERROR_DEAD_OBJECT):
-     *      todo write seguinte falha sem exceção. → recria e reescreve.
-     *   2. O track sai do estado PLAYING (pausado por foco de áudio, por uma
-     *      fala do TTS, pelo player do monitor): os writes ENTRAM no buffer e
-     *      não tocam nada. → confere playState e chama play() de novo.
-     *   3. A rota A2DP dos óculos entra em baixo consumo entre uma fala e
-     *      outra; o track continua "vivo e tocando", mas o som não chega ao
-     *      alto-falante. Não há erro nenhum para detectar. → a cada NOVA fala
-     *      (silêncio de mais de 1,2 s, quando o áudio anterior já escoou por
-     *      completo) a saída é recriada do zero, garantindo rota nova. */
+    /** Escreve no AudioTrack mantendo a saída VIVA entre uma fala e outra. */
     private fun tocar(pcm: ByteArray, novaFala: Boolean) {
         if (novaFala) {
-            // Seguro: o intervalo garante que a fala anterior já terminou de
-            // sair, então nada é cortado ao trocar de track.
+            // Seguro: o intervalo garante que a fala anterior já terminou de sair, então nada é cortado ao trocar de track.
             track?.let { antigo -> runCatching { antigo.stop(); antigo.release() } }
             track = null
             trechosDaFala = 0
@@ -253,6 +178,8 @@ class PonteGemini(
         ws = cliente.newWebSocket(pedido, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 val iniciar = JSONObject().put("tipo", "iniciar").put("sessaoId", sessaoId)
+                // nunca logar o token
+                if (BuildConfig.PV_PONTE_TOKEN.isNotEmpty()) iniciar.put("token", BuildConfig.PV_PONTE_TOKEN)
                 if (modelo.isNotBlank()) iniciar.put("modelo", modelo)
                 if (!trilha.isNullOrBlank()) iniciar.put("trilha", trilha)
                 if (palavras.isNotEmpty()) iniciar.put("palavras", JSONObject(palavras))
@@ -262,10 +189,6 @@ class PonteGemini(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (webSocket !== ws) return // socket antigo
                 val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
-                // runCatching em volta de TUDO: estes callbacks rodam na thread
-                // do OkHttp e caem em código de tela (bipe, corrotina, estado).
-                // Uma exceção ali derrubava o WebSocket, que reconectava em 3 s,
-                // e a perícia entrava num vai e vem invisível.
                 runCatching { tratarMensagem(msg) }
                     .onFailure { Log.w(TAG, "falha ao tratar ${msg.optString("tipo")}", it) }
             }
@@ -279,9 +202,6 @@ class PonteGemini(
                             if (etapa == "triagem") "Assistente IA pronto — vai perguntar o tipo de exame."
                             else "Assistente IA pronto — pode falar.",
                         )
-                        // O que ficou guardado antes da sessão abrir vai agora
-                        // (e vai DE NOVO a cada reconexão — sessão nova no
-                        // Gemini não lembra da anterior).
                         contextoCaso?.let { enviarJson("contexto", "texto", it) }
                         urlVideo?.let { enviarJson("video", "url", it) }
                     }
@@ -292,17 +212,10 @@ class PonteGemini(
                     "triagem" -> onTriagem()
                     "modo" -> {
                         modo = msg.optString("modo", "conversa")
-                        // Silêncio e pausa cortam a fala: o que já estava na
-                        // fila não pode continuar saindo, e a janela do
-                        // half-duplex não pode segurar o microfone por um
-                        // áudio que foi descartado.
                         if (modo != "conversa") pararFala()
                         onModo(modo, msg.optString("origem"))
                     }
                     "achado" -> msg.optJSONObject("achado")?.let { onAchado(it) }
-                    // textoOu(): a ponte manda trilha: null quando volta ao
-                    // assistente geral, e optString transformava isso na
-                    // palavra "null" no cartão de roteiro.
                     "trilha" -> onTrilha(msg.textoOu("trilha"), msg.textoOu("nome"), msg.textoOu("origem"))
                     "comando" -> onComando(
                         msg.optString("id"), msg.optString("nome"),
@@ -314,22 +227,13 @@ class PonteGemini(
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 if (webSocket !== ws) return // socket antigo
-                // 0x03 = voz de resposta. O write é bloqueante, mas roda na
-                // thread do OkHttp, não na UI.
+                // 0x03 = voz de resposta.
                 if (bytes.size > 1 && bytes[0] == 0x03.toByte()) {
                     val pcm = bytes.substring(1).toByteArray()
                     val agora = System.currentTimeMillis()
-                    // Piso curto: fecha o microfone no instante em que o áudio
-                    // chega, antes de a thread escrever o primeiro trecho. Quem
-                    // estica a janela de verdade é a thread de voz.
+                    // Piso curto: fecha o microfone no instante em que o áudio chega, antes de a thread escrever o primeiro trecho.
                     falandoAteMs = maxOf(falandoAteMs, agora + 300L)
-                    // Fila entupida = reprodução emperrada. Zera tudo: melhor
-                    // perder a fala do que tocar picado e segurar o microfone.
-                    // Medida em SEGUNDOS DE SOM, não em trechos (15/09/2026): o
-                    // Gemini entrega a fala inteira em segundos, em trechos
-                    // pequenos, e um resumo de abertura longo passava de 400
-                    // trechos com a reprodução andando normalmente — a fila
-                    // era zerada e a voz cortava no meio da frase.
+                    // Fila entupida = reprodução emperrada.
                     bytesNaFila.addAndGet(pcm.size.toLong())
                     if (bytesNaFila.get() > 24_000L * 2 * 180) {
                         Log.w(TAG, "voz: fila com mais de 3 min de som (${filaVoz.size} trechos) — descartando")
@@ -341,18 +245,10 @@ class PonteGemini(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                // Socket ANTIGO avisando que morreu depois de já existir uma
-                // conexão nova: ignorar. Sem isto, o servidor derruba a
-                // conexão velha (anti-zumbi), o velho cai aqui, reconecta,
-                // o servidor derruba a "nova velha"... pingue-pongue infinito
-                // que fechava a transmissão no meio da perícia.
                 if (webSocket !== ws) return
                 pronto = false
                 Log.w(TAG, "ponte caiu: ${t.message}")
-                // AUTOMÁTICO: rede de bancada pisca, servidor reinicia — a
-                // ponte se reergue sozinha em vez de esperar um toque. Só o
-                // encerrar() explícito (fim de sessão / desligado à mão) para
-                // as tentativas.
+                // AUTOMÁTICO: rede de bancada pisca, servidor reinicia — a ponte se reergue sozinha em vez de esperar um toque.
                 if (!encerrado) {
                     onStatus("Assistente IA caiu (${t.message ?: "falha de rede"}) — reconectando...")
                     principal.postDelayed({ if (!encerrado) conectar() }, 3_000)
@@ -364,10 +260,6 @@ class PonteGemini(
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (webSocket !== ws) return // socket antigo — já há conexão nova
                 pronto = false
-                // Fechamento LIMPO também reconecta: um redeploy da ponte no
-                // servidor encerra a conexão educadamente (não é "falha"), e
-                // sem isto o assistente ficava morto até religar na mão.
-                // Só o encerrar() explícito (fim de sessão) para de tentar.
                 if (!encerrado) {
                     onStatus("Assistente IA: servidor reiniciou — reconectando...")
                     principal.postDelayed({ if (!encerrado) conectar() }, 3_000)
@@ -407,12 +299,7 @@ class PonteGemini(
         }
     }
 
-    /** ENCERRAMENTO EM CURSO. Entre o "finalizar" confirmado e o laudo pronto
-     *  passam-se até minutos, e nesse intervalo a IA seguia ouvindo e
-     *  respondendo a quem falasse perto dos óculos (campo 15/09/2026). Com isto
-     *  ligado o app para de mandar o microfone e a ponte descarta o que ainda
-     *  chegar e recusa funções — só a confirmação final do finalizar passa.
-     *  `false` desliga (o finalizar falhou e a perícia continua). */
+    /** ENCERRAMENTO EM CURSO. */
     @Volatile private var encerrando = false
     fun definirEncerrando(ativo: Boolean) {
         encerrando = ativo
@@ -425,10 +312,7 @@ class PonteGemini(
         runCatching { ws?.send(JSONObject().put("tipo", "modo").put("modo", novo).toString()) }
     }
 
-    /** true enquanto a voz do assistente ainda está saindo no alto-falante.
-     *
-     *  A janela é esticada pela thread de voz conforme ela escreve, com uma
-     *  cauda de 400 ms para o buffer do AudioTrack escoar. */
+    /** true enquanto a voz do assistente ainda está saindo no alto-falante. */
     fun estaFalando(): Boolean = System.currentTimeMillis() < falandoAteMs + 400L
 
     /** Corta a fala: esvazia a fila, joga fora o que está no buffer do
@@ -443,13 +327,20 @@ class PonteGemini(
     /** Cópia do PCM16/16kHz dos óculos. Barato: se a ponte não está pronta, ignora.
      *  HALF-DUPLEX: enquanto o assistente fala, o mic não sobe — ele não se ouve. */
     fun enviarPcm(pcm: ByteArray) {
-        // Em PAUSA o áudio continua indo: é o Gemini quem transcreve, e sem
-        // isso ninguém ouviria a palavra de volta. A ponte descarta o resto.
+        // Em PAUSA o áudio continua indo: é o Gemini quem transcreve, e sem isso ninguém ouviria a palavra de volta.
         if (!pronto || encerrando || estaFalando()) return
         val quadro = ByteArray(pcm.size + 1)
         quadro[0] = 0x01
         System.arraycopy(pcm, 0, quadro, 1, pcm.size)
         ws?.send(quadro.toByteString())
+    }
+
+    fun enviarQuadro(jpeg: ByteArray) {
+        if (!pronto || encerrando || jpeg.isEmpty()) return
+        val quadro = ByteArray(jpeg.size + 1)
+        quadro[0] = 0x02
+        System.arraycopy(jpeg, 0, quadro, 1, jpeg.size)
+        runCatching { ws?.send(quadro.toByteString()) }
     }
 
     fun encerrar() {
@@ -464,12 +355,6 @@ class PonteGemini(
     companion object {
         private const val TAG = "PonteGemini"
 
-        /**
-         * Busca o CATÁLOGO da ponte (trilhas e modelos) para a aba
-         * Configurações: abre uma conexão curta, manda {tipo:'catalogo'},
-         * lê a resposta e fecha. Não abre sessão Gemini. `aoTerminar` recebe
-         * null se a ponte não respondeu (fora do alcance, URL vazia...).
-         */
         fun buscarCatalogo(url: String, aoTerminar: (CatalogoPonte?) -> Unit) {
             if (url.isBlank()) { aoTerminar(null); return }
             val cliente = OkHttpClient.Builder()
@@ -482,7 +367,9 @@ class PonteGemini(
             }
             val socket = cliente.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    webSocket.send(JSONObject().put("tipo", "catalogo").toString())
+                    val pedido = JSONObject().put("tipo", "catalogo")
+                    if (BuildConfig.PV_PONTE_TOKEN.isNotEmpty()) pedido.put("token", BuildConfig.PV_PONTE_TOKEN)
+                    webSocket.send(pedido.toString())
                 }
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     val msg = runCatching { JSONObject(text) }.getOrNull() ?: return

@@ -38,10 +38,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
 
-/**
- * Implementacao de [GlassesDevice] para o MENTRA LIVE, conectando DIRETO pelo
- * SEU app via Bluetooth com o SDK oficial `com.mentraglass:bluetooth-sdk`.
- */
 class MentraGlassesDevice(
     private val context: Context,
     private val destino: File,
@@ -64,10 +60,7 @@ class MentraGlassesDevice(
     /** PCM da narracao (16 kHz) — alta frequencia, vai por callback, nao por evento. */
     var onPcm: ((pcm: ByteArray, sampleRate: Int) -> Unit)? = null
 
-    /**
-     * Como obter a autorizacao de UMA captura no backend.
-     * O backend emite um token de USO UNICO por foto (POST
-     */
+    /** Como obter a autorizacao de UMA captura no backend. */
     var obterAutorizacao: (suspend () -> AutorizacaoCaptura?)? = null
 
     /** requestId + URL + token emitidos pelo backend para uma unica foto. */
@@ -75,9 +68,7 @@ class MentraGlassesDevice(
         val requestId: String,
         val webhookUrl: String,
         val authToken: String,
-        /** true = o webhook acima é o receptor local do tablet, e não o
-         *  endereço público do backend. Fica por ÚLTIMO e com padrão: os
-         *  chamadores antigos passam os três primeiros por posição. */
+        /** true = o webhook acima é o receptor local do tablet, e não o endereço público do backend. */
         val peloTablet: Boolean = false,
     )
 
@@ -101,21 +92,12 @@ class MentraGlassesDevice(
     private var tentativasAutomaticas = 0
     private val MAX_TENTATIVAS_AUTOMATICAS = 3
 
-    // RECONEXÃO DE UMA LIGAÇÃO QUE CAIU (14/09/2026). O retry acima só cobria o
-    // PRIMEIRO scan não achar nada. Quando um óculos JÁ CONECTADO caía — e caiu
-    // aos 3 min numa apresentação de teste — o app apenas escrevia "Óculos
-    // desconectado" e ficava parado esperando o perito tocar em CONECTAR.
-    // Agora ele mesmo tenta voltar, com espera crescente, por ~2 min; na volta
-    // a tela reenvia a Wi-Fi salva e religa o vídeo (MainActivity já faz isso
-    // ao receber Conexao(true)). Só não insiste se foi o perito que desligou.
     private var reconexao: Job? = null
     private var desligadoPeloPerito = false
     private var conectadoDesdeMs = 0L
     private val ESPERAS_RECONEXAO_MS = longArrayOf(2_000, 4_000, 8_000, 15_000, 20_000, 30_000, 30_000)
 
-    // ------------------------------------------------------------------------
     // Conexao (nao esta na interface; especifico do acessorio BLE)
-    // ------------------------------------------------------------------------
 
     /** Inicia a conexao: tenta o dispositivo padrao; se nao houver, escaneia. */
     fun conectar() {
@@ -129,11 +111,6 @@ class MentraGlassesDevice(
         escanear()
     }
 
-    /**
-     * Laço de volta depois de uma queda: espera, tenta o dispositivo padrão
-     * (ou escaneia, se não houver), e repete com esperas maiores. Para assim
-     * que [onGlassesChanged] disser que conectou, ou se o perito desligar.
-     */
     private fun agendarReconexao() {
         if (reconexao?.isActive == true) return
         reconexao = scope.launch {
@@ -149,8 +126,7 @@ class MentraGlassesDevice(
                     pararScan?.invoke(); pararScan = null
                     if (sdk.getDefaultDevice() != null) sdk.connectDefault() else escanear()
                 } catch (e: Exception) {
-                    // Bluetooth do tablet desligado, SDK ocupado com a tentativa
-                    // anterior... vira log; a próxima volta do laço tenta de novo.
+                    // Bluetooth do tablet desligado, SDK ocupado com a tentativa anterior... vira log; a próxima volta do laço tenta de novo.
                     Log.w(TAG, "reconexao BLE: tentativa $n nao iniciou: ${e.message}")
                 }
             }
@@ -166,16 +142,10 @@ class MentraGlassesDevice(
         }
     }
 
-    /**
-     * Escaneia por Mentra Live. MVP (1 par por bancada): conecta no primeiro
-     * encontrado. PRODUCAO (varios oculos na sala): trocar por um seletor
-     */
+    /** Escaneia por Mentra Live. */
     fun escanear() {
         tentandoConectar = false
         // sdk.scan() LANÇA BluetoothSdkException com o Bluetooth desligado.
-        // Este método também é chamado pelo retry automático (onScanStopped),
-        // fora do try/catch da tela — sem esta guarda, desligar o Bluetooth no
-        // meio de um retry derrubava o app. Vira evento de erro, não crash.
         val session = try {
             sdk.scan(DeviceModel.MENTRA_LIVE, timeoutMs = 6_000) { devices ->
                 if (tentandoConectar) return@scan      // ja iniciamos uma conexao
@@ -196,13 +166,8 @@ class MentraGlassesDevice(
         pararScan = { session.stop() }
     }
 
-    /**
-     * Scan terminou. Se nao achou/conectou nada, tenta de novo automaticamente
-     * (até [MAX_TENTATIVAS_AUTOMATICAS] vezes) antes de pedir ação manual —
-     */
+    /** Scan terminou. */
     override fun onScanStopped(reason: ScanStopReason) {
-        // Durante a reconexão automática quem manda é o laço de agendarReconexao;
-        // o retry do scan inicial não pode se meter no meio.
         if (reconexao?.isActive == true) return
         if (!conectado && !tentandoConectar) {
             if (tentativasAutomaticas < MAX_TENTATIVAS_AUTOMATICAS) {
@@ -227,13 +192,9 @@ class MentraGlassesDevice(
         sdk.disconnect()
     }
 
-    // ------------------------------------------------------------------------
     // Wi-Fi DOS OCULOS  — pre-requisito da foto, nao um extra
 
-    /**
-     * Manda as credenciais da Wi-Fi para os oculos (provisionamento por BLE).
-     * `sendWifiCredentials` e suspend e devolve o estado final do Wi-Fi, entao
-     */
+    /** Manda as credenciais da Wi-Fi para os oculos (provisionamento por BLE). */
     fun configurarWifi(ssid: String, senha: String) {
         if (!conectado) {
             _eventos.tryEmit(GlassesEvent.Erro("conecte os óculos antes de configurar o Wi-Fi"))
@@ -243,8 +204,6 @@ class MentraGlassesDevice(
             _eventos.tryEmit(GlassesEvent.Erro("informe o nome da rede (SSID)"))
             return
         }
-        // Um envio por vez: o SDK recusa o segundo ("already waiting") e o
-        // reenvio automático da tela podia cair em cima do toque do perito.
         if (enviandoWifi) {
             _eventos.tryEmit(GlassesEvent.Aviso("Envio de Wi-Fi já em andamento — aguarde."))
             return
@@ -252,17 +211,28 @@ class MentraGlassesDevice(
         enviandoWifi = true
         scope.launch {
             try {
-                // Diagnóstico primeiro: os óculos ENXERGAM essa rede? (2.4 GHz apenas)
-                // COM PRAZO (15/09/2026): o requestWifiScan é suspend e, em campo,
-                // ficou sem voltar — e o envio da rede, que vem depois, nunca
-                // acontecia. A tela dizia "Procurando..." para sempre e parecia
-                // que o app "não puxava o Wi-Fi". Sem resposta em 6 s, segue sem
-                // o diagnóstico: o que importa é enviar a rede.
+                var esperouPronto = 0
+                while (!oculosProntos() && conectado && esperouPronto < 40_000) {
+                    if (esperouPronto == 0) {
+                        _eventos.tryEmit(GlassesEvent.Aviso("Óculos ainda ligando — a rede vai assim que eles estiverem prontos..."))
+                    }
+                    delay(1_000); esperouPronto += 1_000
+                }
+                if (!conectado) return@launch
+                // Já estão nesta rede?
+                wifiAtualDosOculos()?.let { atual ->
+                    if (atual.ssid.equals(ssid.trim(), ignoreCase = true)) {
+                        wifiConectado = true
+                        _eventos.tryEmit(GlassesEvent.Wifi(true, atual.ssid))
+                        return@launch
+                    }
+                }
+                // Diagnóstico primeiro: os óculos ENXERGAM essa rede?
                 _eventos.tryEmit(GlassesEvent.Aviso("Procurando \"$ssid\" pelos óculos..."))
-                val redes = withTimeoutOrNull(6_000) {
+                val redes = withTimeoutOrNull(12_000) {
                     runCatching { sdk.requestWifiScan() }.getOrDefault(emptyList())
                 } ?: run {
-                    Log.w(TAG, "requestWifiScan sem resposta em 6 s — enviando a rede sem o diagnóstico")
+                    Log.w(TAG, "requestWifiScan sem resposta em 12 s — enviando a rede sem o diagnóstico")
                     emptyList()
                 }
                 if (redes.isNotEmpty() && redes.none { it.ssid.equals(ssid.trim(), ignoreCase = true) }) {
@@ -281,7 +251,7 @@ class MentraGlassesDevice(
                 val resposta = withTimeout(45_000) {
                     sdk.sendWifiCredentials(ssid = ssid.trim(), password = senha)
                 }
-                Log.d(TAG, "sendWifiCredentials -> $resposta")
+                Log.d(TAG, "sendWifiCredentials -> ${resposta.status?.javaClass?.simpleName} erro=${resposta.error}")
                 val st = resposta.status
                 if (st is WifiStatus.Connected) {
                     wifiConectado = true
@@ -295,11 +265,11 @@ class MentraGlassesDevice(
             } catch (e: Exception) {
                 val msg = e.message.orEmpty()
                 when {
-                    msg.contains("timed out", ignoreCase = true) -> _eventos.tryEmit(
-                        GlassesEvent.Aviso(
-                            "Os óculos ainda estão entrando na rede — aguarde ~20s; o estado atualiza sozinho."
-                        )
-                    )
+                    // O SDK espera 15 s pela resposta; entrar numa rede (associação + DHCP) leva mais que isso com frequência.
+                    msg.contains("timed out", ignoreCase = true) -> {
+                        _eventos.tryEmit(GlassesEvent.Aviso("Óculos ainda entrando em \"$ssid\" — conferindo..."))
+                        aguardarWifiDepoisDoEnvio(ssid.trim())
+                    }
                     msg.contains("already waiting", ignoreCase = true) -> _eventos.tryEmit(
                         GlassesEvent.Aviso("Envio de Wi-Fi já em andamento — aguarde, sem tocar de novo.")
                     )
@@ -314,11 +284,56 @@ class MentraGlassesDevice(
     /** true enquanto um sendWifiCredentials está em curso. */
     @Volatile private var enviandoWifi = false
 
+    /** O Android dos óculos terminou de ligar? (SDK: `ready` = glasses_ready.) */
+    private fun oculosProntos(): Boolean =
+        (runCatching { sdk.getGlasses() }.getOrNull() as? GlassesRuntimeState.Connected)?.ready == true
+
+    /** A Wi-Fi que os óculos dizem ter AGORA, pelo estado do SDK — sem esperar evento. */
+    private fun wifiAtualDosOculos(): WifiStatus.Connected? =
+        (runCatching { sdk.getGlasses() }.getOrNull() as? GlassesRuntimeState.Connected)?.wifi as? WifiStatus.Connected
+
+    private suspend fun aguardarWifiDepoisDoEnvio(ssid: String) {
+        var esperou = 0
+        while (esperou < 45_000 && conectado) {
+            delay(3_000); esperou += 3_000
+            wifiAtualDosOculos()?.let { atual ->
+                wifiConectado = true
+                _eventos.tryEmit(GlassesEvent.Wifi(true, atual.ssid))
+                if (!atual.ssid.equals(ssid, ignoreCase = true)) {
+                    _eventos.tryEmit(GlassesEvent.Aviso("Os óculos entraram em \"${atual.ssid}\", não em \"$ssid\"."))
+                }
+                return
+            }
+            if (esperou == 15_000) pedirStatusDeWifi()
+        }
+        if (!conectado) return
+        wifiConectado = false
+        _eventos.tryEmit(GlassesEvent.Wifi(false, ssid))
+        _eventos.tryEmit(
+            GlassesEvent.Erro(
+                "Os óculos não entraram em \"$ssid\". Confira a senha, se a rede é 2,4 GHz " +
+                    "(não a versão 5G) e se os óculos estão perto do roteador. Depois toque em Enviar de novo."
+            )
+        )
+    }
+
+    /** Pede aos óculos um wifi_status agora (o SDK só faz isso sozinho no boot). */
+    private fun pedirStatusDeWifi() {
+        try {
+            val campo = MentraBluetoothSdk::class.java.getDeclaredField("deviceManager")
+            campo.isAccessible = true
+            val dm = campo.get(sdk) as? DeviceManager ?: return
+            (dm.sgc as? MentraLive)?.refreshGlassesWifiStatus()
+        } catch (e: Exception) {
+            Log.w(TAG, "nao consegui pedir o status de Wi-Fi: ${e.message}")
+        }
+    }
+
     /** Pede aos oculos a lista de redes visiveis. Tambem e suspend. */
     fun escanearWifi() {
         scope.launch {
             val redes = runCatching { sdk.requestWifiScan() }.getOrNull()
-            Log.d(TAG, "redes visiveis pelos oculos: $redes")
+            Log.d(TAG, "redes visiveis pelos oculos: ${if (redes == null) "sem resposta" else "recebidas"}")
         }
     }
 
@@ -327,7 +342,7 @@ class MentraGlassesDevice(
         val ligado = st is WifiStatus.Connected
         val ssid = (st as? WifiStatus.Connected)?.ssid
         wifiConectado = ligado
-        Log.d(TAG, "wifi dos oculos: conectado=$ligado ssid=$ssid | bruto=$event")
+        Log.d(TAG, "wifi dos oculos: conectado=$ligado ssid=$ssid")
         _eventos.tryEmit(GlassesEvent.Wifi(ligado, ssid))
     }
 
@@ -335,15 +350,12 @@ class MentraGlassesDevice(
     var wifiConectado: Boolean = false
         private set
 
-    /**
-     * Resultado real do upload da foto. `requestPhoto` retornar sem excecao so
-     * quer dizer que o comando foi aceito — quem confirma que o JPEG chegou ao
-     */
+    /** Resultado real do upload da foto. */
     override fun onPhotoResponse(event: com.mentra.bluetoothsdk.PhotoResponseEvent) {
         val url = campoTexto(event, "uploadUrl", "url")
         val req = campoTexto(event, "requestId", "id") ?: ultimoRequestId.orEmpty()
         val erro = campoTexto(event, "error", "errorMessage", "message")
-        Log.d(TAG, "photo_response: req=$req url=$url erro=$erro | bruto=$event")
+        Log.d(TAG, "photo_response: req=$req url=$url erro=$erro")
         if (erro != null) {
             _eventos.tryEmit(GlassesEvent.Erro("óculos não conseguiram enviar a foto: $erro"))
             return
@@ -359,25 +371,8 @@ class MentraGlassesDevice(
     /** Guardado para casar o photo_response quando o evento nao trouxer o id. */
     private var ultimoRequestId: String? = null
 
-    /**
-     * Capturas cujo JPEG foi endereçado ao TABLET (receptor local), e não ao
-     * webhook público.
-     *
-     * Muda quem tem a palavra final sobre a foto. Com o webhook público, o
-     * único sinal era o `photo_response` dos óculos — e ele diz "eu terminei
-     * meu lado", não "o servidor tem a imagem". Em 08/09/2026 esse sinal veio
-     * duas vezes, o app contou duas fotos, e não havia foto nenhuma no
-     * servidor. Quando a foto vai ao tablet, quem confirma é o arquivo
-     * chegando, e aqui o photo_response passa a ser só aviso.
-     *
-     * É um CONJUNTO POR CAPTURA, não uma chave geral: o receptor pode subir ou
-     * cair no meio da perícia, e uma foto endereçada ao tablet segundos antes
-     * não pode ser julgada pela configuração de agora. A leitura de lacre, que
-     * tem webhook próprio, nunca entra aqui.
-     */
+    /** Capturas cujo JPEG foi endereçado ao TABLET (receptor local), e não ao webhook público. */
     private val capturasNoTablet = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
-    // --- leitura tolerante de campos do SDK (nomes variam entre betas) -------
 
     private fun campoTexto(alvo: Any, vararg nomes: String): String? {
         for (n in nomes) {
@@ -408,24 +403,27 @@ class MentraGlassesDevice(
         return null
     }
 
-    // ------------------------------------------------------------------------
     // Callbacks do SDK (MentraBluetoothSdkListener)
-    // ------------------------------------------------------------------------
 
     override fun onGlassesChanged(glasses: GlassesRuntimeState) {
         val estavaConectado = conectado
         conectado = glasses is GlassesRuntimeState.Connected
+        // O SDK chama isto a CADA mudança de estado dos óculos (bateria, sinal, Wi-Fi, pronto) — não só quando conectam ou caem.
+        if (glasses is GlassesRuntimeState.Connected) {
+            val wifi = glasses.wifi as? WifiStatus.Connected
+            if (wifi != null && !wifiConectado) {
+                wifiConectado = true
+                Log.d(TAG, "wifi dos oculos (pelo estado): ${wifi.ssid}")
+                _eventos.tryEmit(GlassesEvent.Wifi(true, wifi.ssid))
+            }
+        }
+        if (conectado == estavaConectado) return // só transições daqui para baixo
         if (!conectado) {
             tentandoConectar = false
-            // BLE caiu: o que sabíamos da Wi-Fi DELES venceu junto. Os óculos
-            // desligados perdem a rede, e manter "conectado" aqui fazia o app
-            // achar que não precisava reenviar a rede salva na volta.
+            // BLE caiu: o que sabíamos da Wi-Fi DELES venceu junto.
             wifiConectado = false
             if (estavaConectado) {
-                // Queda de uma ligação que estava de pé. O tempo que durou e o
-                // estado que o SDK mandou vão para o logcat: é o que diz se foi
-                // o óculos que apagou, o Bluetooth do tablet ou o app em segundo
-                // plano. Depois disso, a volta automática.
+                // Queda de uma ligação que estava de pé.
                 val duracaoS = (System.currentTimeMillis() - conectadoDesdeMs) / 1000
                 Log.w(TAG, "BLE caiu apos ${duracaoS}s conectado; estado=$glasses")
                 if (!desligadoPeloPerito) agendarReconexao()
@@ -434,19 +432,13 @@ class MentraGlassesDevice(
             tentativasAutomaticas = 0 // conectou: zera o contador de retentativas
             conectadoDesdeMs = System.currentTimeMillis()
             reconexao?.cancel(); reconexao = null
-            // ativarAudioNosOculos() — desligado por ora: suspeita de derrubar
-            // a conexao BLE em alguns firmwares. Fala sai pelo celular.
+            // ativarAudioNosOculos() — desligado por ora: suspeita de derrubar a conexao BLE em alguns firmwares.
         }
         Log.d(TAG, "glasses: $glasses (conectado=$conectado)")
         _eventos.tryEmit(GlassesEvent.Conexao(conectado))
     }
 
-    /**
-     * Liga o servico de fone Bluetooth (HFP) DOS OCULOS, para as confirmacoes
-     * faladas sairem no alto-falante deles. O SDK nao expoe isso na API publica;
-     * o campo privado deviceManager e alcancado por reflexao (SDK 0.1.21-beta.5).
-     * Depois de ligado, pareie "Mentra Live" no Bluetooth do celular UMA vez.
-     */
+    /** Liga o servico de fone Bluetooth (HFP) DOS OCULOS, para as confirmacoes faladas sairem no alto-falante deles. */
     private fun ativarAudioNosOculos() {
         try {
             val campo = MentraBluetoothSdk::class.java.getDeclaredField("deviceManager")
@@ -477,9 +469,7 @@ class MentraGlassesDevice(
     /** Frames PCM do microfone dos oculos → repassa ao app (WS de audio → ASR). */
     override fun onMicPcm(event: MicPcmEvent) {
         framesPcmRecebidos++
-        // Diagnostico: o primeiro frame prova que o microfone DOS OCULOS esta
-        // mesmo transmitindo. Se chegam frames mas nenhuma transcricao, o
-        // problema e o modelo de reconhecimento, nao o microfone.
+        // Diagnostico: o primeiro frame prova que o microfone DOS OCULOS esta mesmo transmitindo.
         if (framesPcmRecebidos == 20) {
             _eventos.tryEmit(GlassesEvent.Aviso("Microfone dos óculos transmitindo ✓"))
         }
@@ -490,15 +480,8 @@ class MentraGlassesDevice(
         _eventos.tryEmit(GlassesEvent.Erro("SDK Mentra: $error"))
     }
 
-    // ------------------------------------------------------------------------
     // Interface GlassesDevice
-    // ------------------------------------------------------------------------
 
-    /**
-     * Foto com autorização JÁ EMITIDA (usada na LEITURA DE LACRE, pré-sessão:
-     * o webhook aponta para /webhooks/lacre/:id, não para a captura de
-     * evidência). Não passa pelo obterAutorizacao nem entra na custódia.
-     */
     fun capturarFotoComAutorizacao(autorizacao: AutorizacaoCaptura) {
         if (!conectado) {
             _eventos.tryEmit(GlassesEvent.Erro("óculos não conectado — toque em CONECTAR ÓCULOS"))
@@ -538,8 +521,7 @@ class MentraGlassesDevice(
             _eventos.tryEmit(GlassesEvent.Erro("óculos não conectado — toque em CONECTAR ÓCULOS"))
             return
         }
-        // requestPhoto e suspend: sobe o JPEG por Wi-Fi ao webhook e so retorna
-        // quando termina. Por isso tudo roda numa corrotina.
+        // requestPhoto e suspend: sobe o JPEG por Wi-Fi ao webhook e so retorna quando termina.
         scope.launch {
             // 1) Autorizacao no backend (token de uso unico, um por foto).
             val autorizacao = try {
@@ -555,19 +537,6 @@ class MentraGlassesDevice(
                 return@launch
             }
 
-            // FOTO DE VERDADE PRIMEIRO, sempre (08/09/2026). Antes, com o vídeo
-            // transmitindo, o app nem pedia a foto aos óculos: marcava o quadro
-            // e deixava o servidor recortá-lo do vídeo no fim. Duas coisas ruins
-            // saíram disso. O perito ouvia "foto capturada" e via o contador
-            // subir para uma coisa que não era foto; e quando o recorte falhava
-            // — e falhou no teste de campo, porque depende de o vídeo estar
-            // consolidado a tempo — o laudo saía com ZERO imagem, sem ninguém
-            // saber. Um quadro de vídeo 720p também não é foto pericial: a foto
-            // dos óculos é de resolução muito maior.
-            //
-            // Agora tenta a foto de verdade mesmo transmitindo. Se os óculos
-            // recusarem (câmera ocupada) ou der erro, aí sim cai na marca no
-            // vídeo — e a tela diz que é marca, não foto.
             ultimoRequestId = autorizacao.requestId
             if (autorizacao.peloTablet) capturasNoTablet.add(autorizacao.requestId)
             try {
@@ -583,9 +552,7 @@ class MentraGlassesDevice(
                         iso = null,
                     )
                 )
-                // NAO emitimos CapturaRemota aqui: requestPhoto voltar sem erro
-                // significa apenas "comando aceito". Quem confirma que o JPEG
-                // chegou ao webhook e o callback onPhotoResponse.
+                // NAO emitimos CapturaRemota aqui: requestPhoto voltar sem erro significa apenas "comando aceito".
                 if (!wifiConectado) {
                     _eventos.tryEmit(
                         GlassesEvent.Erro(
@@ -598,8 +565,7 @@ class MentraGlassesDevice(
                 Log.w(TAG, "requestPhoto falhou (stream ativo? $streamAtivo): ${e.message}")
                 val cameraOcupada = e.message?.contains("busy", ignoreCase = true) == true
                 if (cameraOcupada) {
-                    // Recusa DEFINITIVA, não atraso: os óculos não vão mandar
-                    // arquivo nenhum. O tablet recorta o quadro do vídeo agora.
+                    // Recusa DEFINITIVA, não atraso: os óculos não vão mandar arquivo nenhum.
                     _eventos.tryEmit(
                         GlassesEvent.FotoRecusada(
                             autorizacao.requestId, e.message ?: "câmera ocupada com o vídeo",
@@ -607,19 +573,13 @@ class MentraGlassesDevice(
                         )
                     )
                 } else if (autorizacao.peloTablet) {
-                    // `requestPhoto` é suspend e só volta quando o UPLOAD acaba:
-                    // um estouro de tempo aqui não quer dizer que a foto não foi
-                    // tirada. Com o receptor no tablet, a resposta certa é
-                    // esperar o arquivo — quem desiste é o relógio do app, que
-                    // marca o quadro no vídeo se nada chegar.
                     _eventos.tryEmit(
                         GlassesEvent.Aviso(
                             "os óculos não confirmaram a foto (${e.message}) — sigo esperando o arquivo no tablet",
                         )
                     )
                 } else {
-                    // Câmera ocupada com o stream, ou qualquer outra recusa: cai
-                    // para a MARCA no vídeo, dizendo o que é.
+                    // Câmera ocupada com o stream, ou qualquer outra recusa: cai para a MARCA no vídeo, dizendo o que é.
                     _eventos.tryEmit(
                         GlassesEvent.CapturaRemota(TipoEvidencia.FOTO, autorizacao.requestId, null, fotoDeVerdade = false)
                     )
@@ -634,24 +594,28 @@ class MentraGlassesDevice(
         }
     }
 
-    // ------------------------------------------------------------------------
     // VIDEO DA SESSAO — os oculos transmitem RTMP direto ao servidor (startStream).
 
-    /** Perfil do stream. O padrão (servidor) é o que a VPS aguentava; para o
-     *  tablet na mesma Wi-Fi dá para pedir mais (05/09/2026). */
+    /** Perfil do stream. */
     data class PerfilVideo(val largura: Int, val altura: Int, val bitrate: Int, val fps: Int, val nome: String) {
         companion object {
             val SERVIDOR = PerfilVideo(960, 540, 1_200_000, 15, "540p · 15 fps · 1,2 Mbps")
             val TABLET_720P30 = PerfilVideo(1280, 720, 3_000_000, 30, "720p · 30 fps · 3 Mbps")
             val TABLET_1080P30 = PerfilVideo(1920, 1080, 5_000_000, 30, "1080p · 30 fps · 5 Mbps")
+
+            /** Mesmo detalhe do perfil do servidor, movimento no dobro de quadros.
+             *  Pede 2,5 Mbps pela internet: só com link de subida bom na bancada. */
+            val SERVIDOR_FLUIDO = PerfilVideo(960, 540, 2_500_000, 30, "540p · 30 fps · 2,5 Mbps (fluido)")
+            /** 720p fluido de verdade: 6 Mbps para os 30 fps não perderem nitidez. */
+            val TABLET_720P_FLUIDO = PerfilVideo(1280, 720, 6_000_000, 30, "720p · 30 fps · 6 Mbps (fluido)")
+            /** O mais fluido que os óculos dão. Exige Wi-Fi 5 GHz boa no tablet. */
+            val TABLET_1080P_FLUIDO = PerfilVideo(1920, 1080, 8_000_000, 30, "1080p · 30 fps · 8 Mbps (fluido)")
         }
     }
     var perfilVideo: PerfilVideo = PerfilVideo.SERVIDOR
 
     private var streamAtivo = false
-    /** Cresce a cada iniciarVideo. O laço de insistência do pararVideo compara
-     *  com a geração que ele capturou: sem isso, a 2ª tentativa de stop (2 s
-     *  depois) matava o stream que a RETOMADA da pausa acabou de abrir. */
+    /** Cresce a cada iniciarVideo. */
     private var geracaoVideo = 0
     private var tarefaIniciarVideo: kotlinx.coroutines.Job? = null
 
@@ -667,10 +631,6 @@ class MentraGlassesDevice(
         if (!wifiConectado) {
             _eventos.tryEmit(GlassesEvent.Aviso("óculos sem Wi-Fi: o vídeo só sobe quando o Wi-Fi conectar"))
         }
-        // streamAtivo ANTES do launch: startStream leva segundos negociando com
-        // os óculos, e um pararVideo nessa janela caía no `if (!streamAtivo)
-        // return` — a pausa dizia na tela que parou e o stream seguia vivo a
-        // pausa inteira, gravando tudo (revisão 04/09).
         streamAtivo = true
         geracaoVideo += 1
         tarefaIniciarVideo = scope.launch {
@@ -680,18 +640,7 @@ class MentraGlassesDevice(
                     StreamRequest(
                         streamUrl = urlStream,
                         streamId = "pv-${System.currentTimeMillis()}",
-                        // `sound` é o BIPE de início/fim nos óculos, NÃO a trilha de
-                        // áudio: o stream sempre carregou o microfone (o SDK tem um
-                        // StreamAudioConfig próprio, com cancelamento de eco, justamente
-                        // por isso). Falso só para o bipe não entrar na gravação da
-                        // perícia. Corrigido em 08/09/2026 — o comentário anterior dizia
-                        // que isto evitava suspender o microfone, o que era suposição
-                        // minha e estava errado: o vídeo do laudo tem áudio.
                         sound = false,
-                        // 720p/2 Mbps/30 fps pedia mais do que o Wi-Fi da bancada dava: chegavam
-                        // ~6 quadros/s irregulares e o vídeo do laudo saía travado (campo 03/09).
-                        // 540p/1,2 Mbps/15 fps é o que os óculos sustentam — mais quadros de
-                        // verdade, mesma legibilidade do vestígio.
                         video = StreamVideoConfig(width = perfilVideo.largura, height = perfilVideo.altura, bitrate = perfilVideo.bitrate, fps = perfilVideo.fps),
                     )
                 )
@@ -706,8 +655,7 @@ class MentraGlassesDevice(
     override fun pararVideo() {
         if (!streamAtivo) return
         streamAtivo = false
-        // Cancela um startStream ainda em negociação: senão ele termina depois
-        // do stop e deixa o stream de pé.
+        // Cancela um startStream ainda em negociação: senão ele termina depois do stop e deixa o stream de pé.
         tarefaIniciarVideo?.cancel()
         val minhaGeracao = geracaoVideo
         scope.launch {
@@ -750,16 +698,12 @@ class MentraGlassesDevice(
         }
     }
 
-    // ------------------------------------------------------------------------
     // COMANDO DE VOZ pelos MICROFONES DOS OCULOS (transcricao local)
 
     /** Chamado quando os oculos ouvem uma palavra-chave de captura. */
     var onComandoVoz: (() -> Unit)? = null
 
-    /**
-     * Palavras que disparam a captura.
-     * Inclui INGLES de proposito: a transcricao local dos oculos costuma vir
-     */
+    /** Palavras que disparam a captura. */
     var palavrasDeComando: List<String> = listOf(
         // portugues
         "captur", "foto", "registrar",
@@ -800,8 +744,7 @@ class MentraGlassesDevice(
             if (transcricoesRecebidas > 0) return@launch          // esta transcrevendo
 
             if (framesPcmRecebidos > 0) {
-                // Mic OK, transcricao embarcada nao. Isso e ESPERADO neste
-                // firmware — e nao e problema: o audio ja esta seguindo por
+                // Mic OK, transcricao embarcada nao.
                 Log.d(TAG, "transcricao embarcada sem resposta; ASR do backend assume")
             } else {
                 _eventos.tryEmit(
@@ -824,14 +767,13 @@ class MentraGlassesDevice(
     override fun onLocalTranscription(event: com.mentra.bluetoothsdk.LocalTranscriptionEvent) {
         transcricoesRecebidas++
         val texto = campoTexto(event, "text", "transcript", "transcription")
-        Log.d(TAG, "transcricao #$transcricoesRecebidas: texto=$texto | bruto=$event")
+        Log.d(TAG, "transcricao #$transcricoesRecebidas: ${texto?.length ?: 0} caracteres")
         if (texto.isNullOrBlank()) {
             // Chegou evento mas sem texto legivel: mostra o cru para diagnostico.
             _eventos.tryEmit(GlassesEvent.Aviso("Óculos ouviram algo (sem texto): $event"))
             return
         }
-        // Mostra SEMPRE o que os oculos entenderam — assim da para ver se ele
-        // ouve mas erra a palavra, ou se nao ouve nada.
+        // Mostra SEMPRE o que os oculos entenderam — assim da para ver se ele ouve mas erra a palavra, ou se nao ouve nada.
         _eventos.tryEmit(GlassesEvent.Aviso("Ouvi: \"$texto\""))
         val normalizado = semAcento(texto)
         val bateu = palavrasDeComando.any { normalizado.contains(semAcento(it)) }
@@ -859,8 +801,6 @@ class MentraGlassesDevice(
 
     override fun pararAudio() {
         if (!micLigado) return
-        // Se a escuta de COMANDO esta ativa, nao desligue o microfone: os dois
-        // usam o mesmo mic dos oculos e desligar aqui mataria o comando de voz.
         if (escutandoComando) {
             _eventos.tryEmit(GlassesEvent.Aviso("Narração parada (óculos seguem ouvindo comandos)"))
             return

@@ -11,21 +11,13 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-/**
- * Cliente HTTP do backend PeritaVision (API B).
- * Usa HttpURLConnection e org.json — ambos ja vem no Android, sem dependencia
- */
+/** Cliente HTTP do backend PeritaVision (API B). */
 class BackendClient(var baseUrl: String) {
 
     /** Token JWT do perito, preenchido pelo [login]. */
     var token: String? = null
         private set
-    /** Credenciais do último login — para RENOVAR o token sozinho. O JWT do
-     *  backend expira (15 min por padrão) e uma perícia dura mais que isso:
-     *  em campo (03/09/2026) o Finalizar caiu com 401 depois de uma hora de
-     *  bancada, e a narração dos últimos 45 min foi recusada em silêncio.
-     *  Agora: token com mais de RENOVAR_APOS_MS é renovado ANTES da chamada,
-     *  e um 401 inesperado renova e repete a chamada uma vez. */
+    /** Credenciais do último login — para RENOVAR o token sozinho. */
     private var credenciais: Pair<String, String>? = null
     @Volatile private var tokenObtidoEm = 0L
     private val RENOVAR_APOS_MS = 10 * 60_000L
@@ -38,15 +30,13 @@ class BackendClient(var baseUrl: String) {
         val authToken: String,
     )
 
-    // ------------------------------------------------------------------------
     // Fluxo
-    // ------------------------------------------------------------------------
 
     suspend fun login(matricula: String, senha: String): String {
         val corpo = JSONObject().put("matricula", matricula).put("senha", senha)
         val r = postJson("/v1/auth/login", corpo, autenticado = false)
         val t = r.texto("token")
-            ?: throw BackendException("login sem token: $r")
+            ?: throw BackendException("login sem token (${r.length()} campos)")
         token = t
         tokenObtidoEm = System.currentTimeMillis()
         credenciais = matricula to senha
@@ -100,7 +90,6 @@ class BackendClient(var baseUrl: String) {
         val dataOcorrencia: String?,
         val statusProtocolo: String?,
         val areaAtuacao: String?,
-        /** "nome (papel)" por envolvido — ex.: "Franciane de Jesus Alves (envolvida)". */
         val envolvidos: List<String>,
         val documentoPrincipal: String?,
         /** Id para textoDocumento() — o conteúdo da requisição anexada. */
@@ -111,7 +100,7 @@ class BackendClient(var baseUrl: String) {
     suspend fun resolverProtocolo(protocolo: String): CasoAtena {
         val r = postJson("/v1/casos/resolver", JSONObject().put("numeroProtocolo", protocolo))
         val id = r.texto("id")
-            ?: throw BackendException("caso sem id: $r")
+            ?: throw BackendException("caso sem id (${r.length()} campos)")
         fun lista(chave: String): List<String> {
             val a = r.optJSONArray(chave) ?: return emptyList()
             return (0 until a.length()).mapNotNull { i ->
@@ -160,9 +149,6 @@ class BackendClient(var baseUrl: String) {
         )
     }
 
-    /** Requisição do Atena: o texto e, quando não deu, o MOTIVO. O motivo vai
-     *  para o contexto da IA — sem ele o assistente só ficava sem o texto e
-     *  não tinha como dizer ao perito que não havia requisição. */
     data class Requisicao(val texto: String?, val aviso: String?)
 
     suspend fun textoDocumento(documentoId: String): Requisicao {
@@ -200,12 +186,45 @@ class BackendClient(var baseUrl: String) {
     )
 
     /** @param matriculaPerito quem está na bancada — separa os laudos por perito. */
-    suspend fun abrirSessao(casoId: String, perfilId: String, matriculaPerito: String): SessaoAberta {
+    /** Perícia deste perito, neste caso, FINALIZADA há pouco e ainda sem laudo assinado. */
+    data class PericiaAnterior(
+        val sessaoId: String,
+        val iniciadaEm: String?,
+        val finalizadaEm: String?,
+        val fotosRecebidas: Int,
+    )
+
+    /** O que POST /v1/sessoes devolve: a sessão aberta, ou a pergunta. */
+    sealed interface Abertura {
+        data class Aberta(val sessao: SessaoAberta) : Abertura
+        data class Escolher(val anterior: PericiaAnterior) : Abertura
+    }
+
+    /** Abre (ou retoma, ou reabre) a sessão. */
+    suspend fun abrirSessao(
+        casoId: String, perfilId: String, matriculaPerito: String, modo: String? = null,
+    ): Abertura {
         val corpo = JSONObject().put("casoId", casoId).put("perfilId", perfilId)
             .put("matriculaPerito", matriculaPerito)
+        if (modo != null) corpo.put("modo", modo)
         val r = postJson("/v1/sessoes", corpo)
+        if (r.optBoolean("escolher", false)) {
+            val a = r.optJSONObject("anterior") ?: throw BackendException("escolha sem a perícia anterior (${r.length()} campos)")
+            return Abertura.Escolher(
+                PericiaAnterior(
+                    sessaoId = a.textoOu("sessaoId"),
+                    iniciadaEm = a.texto("iniciadaEm"),
+                    finalizadaEm = a.texto("finalizadaEm"),
+                    fotosRecebidas = a.optInt("fotosRecebidas", 0),
+                ),
+            )
+        }
+        return Abertura.Aberta(lerSessaoAberta(r))
+    }
+
+    private fun lerSessaoAberta(r: JSONObject): SessaoAberta {
         val id = r.texto("sessaoId")
-            ?: throw BackendException("sessao sem id: $r")
+            ?: throw BackendException("sessao sem id (${r.length()} campos)")
         return SessaoAberta(
             sessaoId = id,
             rtmpUrl = r.texto("rtmpUrl"),
@@ -217,17 +236,14 @@ class BackendClient(var baseUrl: String) {
         )
     }
 
-    /**
-     * Pede ao backend autorizacao para UMA captura. O token vale uma vez so —
-     * chame de novo a cada foto.
-     */
+    /** Pede ao backend autorizacao para UMA captura. */
     suspend fun solicitarCaptura(sessaoId: String): CredencialCaptura {
         val r = postJson("/v1/sessoes/$sessaoId/capturas/solicitar", JSONObject())
         val requestId = r.textoOu("requestId")
         val webhookUrl = r.textoOu("webhookUrl")
         val authToken = r.textoOu("authToken")
         if (requestId.isBlank() || webhookUrl.isBlank()) {
-            throw BackendException("resposta de captura incompleta: $r")
+            throw BackendException("resposta de captura incompleta (${r.length()} campos)")
         }
         return CredencialCaptura(requestId, webhookUrl, authToken)
     }
@@ -254,25 +270,21 @@ class BackendClient(var baseUrl: String) {
     }
 
     /** Finaliza a sessao; o backend monta o laudo e devolve o id dele. */
-    /** 90 s de leitura, não os 20 s do resto: no /finalizar o backend ainda
-     *  tenta recuperar fotos pendentes a partir do vídeo, e isso passa de 20 s
-     *  numa perícia longa. Com o timeout curto o app dizia "não encerrou" e
-     *  ficava na bancada enquanto o servidor encerrava normalmente. */
-    suspend fun finalizarSessao(sessaoId: String): String? {
-        val r = postJson("/v1/sessoes/$sessaoId/finalizar", JSONObject(), leituraMs = 90_000)
-        // texto() em vez de optString: o campo faltava e o "" fazia o
-        // cartão anunciar "laudo pronto" sem id nenhum.
+    suspend fun finalizarSessao(sessaoId: String, videoDepois: Boolean = false): String? {
+        val corpo = JSONObject()
+        if (videoDepois) corpo.put("videoDepois", true)
+        val r = postJson("/v1/sessoes/$sessaoId/finalizar", corpo, leituraMs = 90_000)
+        // texto() em vez de optString: o campo faltava e o "" fazia o cartão anunciar "laudo pronto" sem id nenhum.
         return r.texto("laudoId")
     }
 
-    /** SEGMENTO DE VÍDEO gravado no tablet → servidor (destino "tablet", 05/09).
-     *  Sobe o .flv em streaming (tamanho fixo, sem carregar na memória) para o
-     *  mesmo lugar onde o RTMP da VPS gravava; a consolidação do laudo não muda.
-     *  Devolve o SHA-256 que o servidor calculou, para conferir com o local. */
-    suspend fun enviarSegmentoVideo(sessaoId: String, arquivo: java.io.File, inicioMs: Long): String =
+    suspend fun enviarSegmentoVideo(sessaoId: String, arquivo: java.io.File, inicioMs: Long, lote: Boolean = false): String =
         comReautenticacao {
             withContext(Dispatchers.IO) {
-                val conn = abrir(URL(baseUrl.trimEnd('/') + "/v1/sessoes/$sessaoId/video/segmentos?inicioMs=$inicioMs"), "POST", leituraMs = 10 * 60_000).apply {
+                // lote=1: vêm mais segmentos e depois o /concluir — o servidor
+                // não consolida a cada arquivo.
+                val extra = if (lote) "&lote=1" else ""
+                val conn = abrir(URL(baseUrl.trimEnd('/') + "/v1/sessoes/$sessaoId/video/segmentos?inicioMs=$inicioMs$extra"), "POST", leituraMs = 10 * 60_000).apply {
                     autenticar(this)
                     setRequestProperty("Content-Type", "video/x-flv")
                     doOutput = true
@@ -285,19 +297,39 @@ class BackendClient(var baseUrl: String) {
             }
         }
 
-    /** FOTOS JÁ RECEBIDAS na sessão — a galeria da bancada (08/09/2026).
-     *  O JPEG nunca passa pelo app: os óculos sobem direto ao servidor. Para o
-     *  perito conferir se a foto saiu boa ANTES de sair da mesa, o app busca a
-     *  lista aqui e baixa cada imagem em miniatura. */
+    /** O tablet terminou de subir o vídeo guardado desta sessão: o servidor
+     *  consolida, recorta os quadros pendentes e fecha o que faltou. */
+    suspend fun concluirVideo(sessaoId: String) {
+        postJson("/v1/sessoes/$sessaoId/video/concluir", JSONObject(), leituraMs = 30_000)
+    }
+
+    // Perícia assistida remota
+
+    data class SalaAssistida(val codigo: String, val expiraEm: String)
+
+    /** Abre a sala desta sessão e devolve o código de 6 dígitos para a perita oficial. */
+    suspend fun criarSalaAssistida(sessaoId: String): SalaAssistida {
+        val o = postJson("/v1/sessoes/$sessaoId/assistida/sala", JSONObject())
+        return SalaAssistida(codigo = o.textoOu("codigo"), expiraEm = o.textoOu("expiraEm"))
+    }
+
+    suspend fun encerrarAssistida(sessaoId: String) {
+        postJson("/v1/sessoes/$sessaoId/assistida/encerrar", JSONObject())
+    }
+
+    /** URL do WebSocket de sinalização da sala (o token vai no cabeçalho, não na URL). */
+    fun urlSinalAssistida(sessaoId: String): String {
+        val base = baseUrl.trimEnd('/')
+        val ws = if (base.startsWith("http")) "ws" + base.removePrefix("http") else base
+        return "$ws/v1/sessoes/$sessaoId/assistida/sinal"
+    }
+
     data class FotoDaPericia(
         val id: String,
         val quando: String,
         val bytes: Long,
         /** "quadro_do_video" quando não foi foto: é o quadro recortado do vídeo. */
         val origem: String?,
-        /** requestId da autorização — é o que casa a foto que o tablet já
-         *  mostra na bancada com a mesma foto vinda do servidor, para a
-         *  galeria não exibir a imagem duas vezes. */
         val requestId: String?,
     )
 
@@ -323,8 +355,7 @@ class BackendClient(var baseUrl: String) {
             val conn = abrir(URL(baseUrl.trimEnd('/') + "/v1/capturas/$capturaId/arquivo"), "GET", leituraMs = 30_000)
                 .apply {
                     autenticar(this)
-                    // `abrir` fixa Accept: application/json, e aqui vem JPEG. Sem
-                    // corrigir, um proxy que respeite content negotiation devolve 406.
+                    // `abrir` fixa Accept: application/json, e aqui vem JPEG.
                     setRequestProperty("Accept", "image/*")
                 }
             val codigo = conn.responseCode
@@ -393,10 +424,7 @@ class BackendClient(var baseUrl: String) {
     /** Um trecho do laudo, com a origem (atena | perito | ia) para a etiqueta. */
     data class TrechoLaudo(val secao: Int, val titulo: String, val origem: String, val texto: String)
 
-    /**
-     * Rascunho do laudo, seção a seção (GET /v1/laudos/:id). Usado pelo cartão
-     * "Laudo" da tela para mostrar o texto sendo montado logo após o finalizar.
-     */
+    /** Rascunho do laudo, seção a seção (GET /v1/laudos/:id). */
     suspend fun obterLaudo(laudoId: String): List<TrechoLaudo> {
         val r = getJson("/v1/laudos/$laudoId")
         val trechos = r.optJSONArray("trechos") ?: return emptyList()
@@ -411,10 +439,7 @@ class BackendClient(var baseUrl: String) {
         }
     }
 
-    /**
-     * Sobe uma foto que esta no CELULAR para o webhook (modo PHONE de teste).
-     * No modo MENTRA quem sobe o JPEG sao os proprios oculos, por Wi-Fi.
-     */
+    /** Sobe uma foto que esta no CELULAR para o webhook (modo PHONE de teste). */
     suspend fun enviarFoto(cred: CredencialCaptura, arquivo: File): Unit = withContext(Dispatchers.IO) {
         val fronteira = "----peritavision${System.currentTimeMillis()}"
         val conn = abrir(URL(cred.webhookUrl), "POST").apply {
@@ -435,9 +460,7 @@ class BackendClient(var baseUrl: String) {
         conn.disconnect()
     }
 
-    // ------------------------------------------------------------------------
     // Encanamento HTTP
-    // ------------------------------------------------------------------------
 
     private fun abrir(url: URL, metodo: String, leituraMs: Int = 20_000): HttpURLConnection =
         (url.openConnection() as HttpURLConnection).apply {

@@ -12,10 +12,7 @@ import android.speech.SpeechRecognizer
 import android.util.Log
 import java.util.Locale
 
-/**
- * Disparo por VOZ, no proprio celular, SEM backend.
- * Escuta continuamente com o SpeechRecognizer do Android e, ao ouvir uma
- */
+/** Disparo por VOZ, no proprio celular, SEM backend. */
 class VoiceTrigger(
     private val context: Context,
     private val palavrasChave: List<String> = listOf("capturar", "captura", "foto", "registrar"),
@@ -79,8 +76,7 @@ class VoiceTrigger(
             // Reduz a espera de silencio: reage mais rapido a uma palavra solta.
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 800L)
-            // Sem internet o reconhecedor padrao tambem funciona offline quando
-            // o pacote de idioma pt-BR estiver baixado no aparelho.
+            // Sem internet o reconhecedor padrao tambem funciona offline quando o pacote de idioma pt-BR estiver baixado no aparelho.
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, modoOffline)
         }
         try {

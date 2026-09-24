@@ -54,10 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.input.KeyboardType
 
-/*
- * KIT VISUAL — os tijolos da tela.
- * Antes, cada cartão e cada botão eram remontados na mão dentro da MainActivity,
- */
+/** KIT VISUAL — os tijolos da tela. */
 
 /** Significado de um estado, não sua cor. A cor é escolhida pelo tema. */
 enum class Tom { NEUTRO, OK, ATENCAO, ERRO }
@@ -78,12 +75,7 @@ private fun fundoDoTom(tom: Tom): Color = when (tom) {
     Tom.ERRO -> MaterialTheme.colorScheme.errorContainer
 }
 
-// ── Cabeçalho ───────────────────────────────────────────────────────────────
-
-/**
- * Barra de topo. Fica FIXA: o perito precisa saber onde está sem rolar a tela.
- * O subtítulo é contextual — mostra o caso quando há um caso carregado, em vez
- */
+/** Barra de topo. */
 @Composable
 fun BarraDeTopo(
     titulo: String,
@@ -129,10 +121,6 @@ fun BarraDeTopo(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // A logo da Facilmova saiu daqui em 12/09/2026 e foi para a assinatura
-        // do rodapé (RodapeAssinatura): o topo é do cliente — brasão da POLITEC,
-        // nome do produto e o caso em andamento —, e três marcas na mesma linha
-        // deixavam a barra apertada numa tela de demonstração.
         if (onConfiguracoes != null) {
             Box(
                 modifier = Modifier
@@ -156,10 +144,7 @@ fun BarraDeTopo(
 /** Um item da faixa de prontidão. */
 data class Prontidao(val rotulo: String, val tom: Tom)
 
-/**
- * Faixa de prontidão — Óculos / Wi-Fi / Sessão sempre à vista.
- * É a correção da falha mais concreta da tela antiga: para saber se dava para
- */
+/** Faixa de prontidão — Óculos / Wi-Fi / Sessão sempre à vista. */
 @Composable
 fun FaixaProntidao(itens: List<Prontidao>) {
     Row(
@@ -198,12 +183,7 @@ fun FaixaProntidao(itens: List<Prontidao>) {
     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 }
 
-// ── Cartões ─────────────────────────────────────────────────────────────────
-
-/**
- * Cartão. Com [destaque], ganha borda na cor primária e um leve fundo tonal —
- * é assim que a tela diz "o que importa agora é aqui" sem escrever nada.
- */
+/** Cartão. */
 @Composable
 fun CartaoPv(
     destaque: Boolean = false,
@@ -285,10 +265,7 @@ fun TextoApoio(texto: String, tom: Tom? = null) {
     )
 }
 
-/**
- * Cartão que recolhe. Serve para o que já foi resolvido (servidor configurado,
- * óculos na Wi-Fi): continua acessível a um toque, mas para de disputar atenção
- */
+/** Cartão que recolhe. */
 @Composable
 fun CartaoRecolhivel(
     titulo: String,
@@ -299,9 +276,6 @@ fun CartaoRecolhivel(
     destaque: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    // Chaveado por abertoInicial: quando o passo é resolvido (a Wi-Fi conectou,
-    // a sessão abriu) o cartão recolhe sozinho, sem o perito ter que arrumar a
-    // tela. Enquanto o estado não muda, a escolha manual dele é respeitada.
     var aberto by remember(abertoInicial) { mutableStateOf(abertoInicial) }
     val giro by animateFloatAsState(if (aberto) 180f else 0f, label = "giroChevron")
 
@@ -344,8 +318,6 @@ fun CartaoRecolhivel(
         }
     }
 }
-
-// ── Botões ──────────────────────────────────────────────────────────────────
 
 /** Ação principal do cartão. Uma por cartão — se houver duas, uma delas não é principal. */
 @Composable
@@ -447,12 +419,7 @@ private fun ConteudoBotao(texto: String, @DrawableRes icone: Int?, grande: Boole
     )
 }
 
-// ── Campos ──────────────────────────────────────────────────────────────────
-
-/**
- * Campo de texto. Rótulo FORA do campo (não flutuando dentro dele): endereço de
- * IP e SSID são coisas que o perito confere de relance, e rótulo flutuante
- */
+/** Campo de texto. */
 @Composable
 fun CampoPv(
     valor: String,
@@ -505,8 +472,6 @@ fun CampoPv(
         )
     }
 }
-
-// ── Dados de custódia ───────────────────────────────────────────────────────
 
 /** Linha chave→valor. Valores numéricos alinhados à direita, para conferir em coluna. */
 @Composable
@@ -563,7 +528,7 @@ fun Contador(numero: Int, legenda: String) {
     }
 }
 
-/** Bloco de "estou ouvindo". Vermelho porque é gravação ativa, não porque deu erro. */
+/** Bloco de "estou ouvindo". */
 @Composable
 fun AvisoEscuta(
     titulo: String,
@@ -615,12 +580,7 @@ fun AvisoEscuta(
     }
 }
 
-// ── Rodapé ──────────────────────────────────────────────────────────────────
-
-/**
- * Barra de status FIXA no rodapé. Antes o status era um "Status: ..." solto no
- * meio da rolagem — a mensagem mais importante do app (foto enviada? falhou?)
- */
+/** Barra de status FIXA no rodapé. */
 @Composable
 fun BarraDeStatus(texto: String, tom: Tom) {
     Row(
@@ -660,8 +620,6 @@ fun RodapeMarca(empresa: String) {
     )
 }
 
-// ── Checklist de preparação ─────────────────────────────────────────────────
-
 /** Título de uma seção da coluna ("Antes de começar") com um apoio ao lado ("0 de 3 prontos"). */
 @Composable
 fun TituloSecao(titulo: String, apoio: String? = null) {
@@ -686,12 +644,7 @@ fun TituloSecao(titulo: String, apoio: String? = null) {
     }
 }
 
-/**
- * Passo numerado do checklist. Três estados, um por vez:
- *  - ATIVO: borda primária, número em azul — é aqui que o dedo vai agora.
- *  - BLOQUEADO: esmaecido; dá para ler o que vem, mas não dá para agir.
- *  - CONCLUÍDO: recolhe numa linha verde com o resumo; um toque reabre.
- */
+/** Passo numerado do checklist. */
 @Composable
 fun CartaoPasso(
     numero: Int,
@@ -797,8 +750,6 @@ fun CartaoPasso(
     }
 }
 
-// ── Assistente de voz ───────────────────────────────────────────────────────
-
 /** Balão de conversa: [doPerito] à direita em azul; a resposta à esquerda em cinza. */
 @Composable
 fun BalaoConversa(texto: String, doPerito: Boolean) {
@@ -829,18 +780,6 @@ fun BalaoConversa(texto: String, doPerito: Boolean) {
     }
 }
 
-// ── Visor ao vivo ───────────────────────────────────────────────────────────
-
-/**
- * Moldura escura do vídeo dos óculos: pílula "AO VIVO" + cronômetro em cima,
- * fonte e protocolo embaixo, mira de enquadramento no centro. O [conteudo]
- * é o player (ou nada, quando ainda não há vídeo).
- *
- * Com [imagemLimpa] a moldura mostra só a pílula e o cronômetro: nada de
- * texto por cima da imagem, nem mira, nem rodapé — e a legenda embaixo só
- * aparece se vier preenchida. O perito pediu (09/09/2026): "tem como tirar
- * essas escritas do vídeo?" — os números cobriam o que os óculos estavam vendo.
- */
 @Composable
 fun MolduraVisor(
     aoVivo: Boolean,
@@ -944,8 +883,6 @@ fun MolduraVisor(
     }
 }
 
-// ── Laudo em preenchimento ──────────────────────────────────────────────────
-
 /** Barra de progresso fina, sem depender da assinatura do LinearProgressIndicator. */
 @Composable
 fun BarraProgresso(fracao: Float) {
@@ -988,10 +925,7 @@ fun LinhaCampo(rotulo: String, valor: String) {
     }
 }
 
-/**
- * Seção do laudo dentro do cartão "em preenchimento": número, título e
- * etiqueta; o corpo só aparece quando há conteúdo. Pendente = uma linha.
- */
+/** Seção do laudo dentro do cartão "em preenchimento": número, título e etiqueta; o corpo só aparece quando há conteúdo. */
 @Composable
 fun SecaoLaudoPv(
     numero: Int,

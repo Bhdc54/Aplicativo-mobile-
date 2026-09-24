@@ -3,10 +3,7 @@ package br.com.facilmova.peritavision.device
 import android.content.Context
 import java.io.File
 
-/**
- * Ponto UNICO de injecao do dispositivo.
- * A UI (MainActivity) e o dominio (custodia) so conhecem a interface
- */
+/** Ponto UNICO de injecao do dispositivo. */
 object GlassesDeviceFactory {
 
     enum class Tipo { MENTRA, PHONE }

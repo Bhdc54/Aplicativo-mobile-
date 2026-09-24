@@ -45,22 +45,7 @@ import br.com.facilmova.peritavision.data.CatalogoPonte
 import br.com.facilmova.peritavision.data.ConfiguracoesApp
 import br.com.facilmova.peritavision.net.PonteGemini
 
-/**
- * ABA CONFIGURAÇÕES — engrenagem na barra de topo.
- *
- * O que o PERITO ajusta fica à vista: os óculos, a Wi-Fi, o roteiro do exame e
- * as palavras de comando. O que é de INSTALAÇÃO — modelo de IA da conversa,
- * para onde os óculos transmitem, qualidade do vídeo — foi para um cartão
- * "Avançado" recolhido (12/09/2026): continua a um toque, mas não enche a tela
- * de encanamento na frente de quem está assistindo a uma demonstração.
- *
- * As listas de roteiro e de modelo vêm do catálogo da ponte
- * ({tipo:'catalogo'}), então uma trilha nova registrada em prompts/index.mjs
- * aparece aqui sozinha; se a ponte não responder, mostra a cópia local.
- *
- * Escolha aqui vale para a PRÓXIMA sessão — a que está aberta já nasceu com
- * o prompt e o modelo anteriores.
- */
+/** ABA CONFIGURAÇÕES — engrenagem na barra de topo. */
 @Composable
 fun TelaConfiguracoes(
     config: ConfiguracoesApp,
@@ -130,7 +115,6 @@ fun TelaConfiguracoes(
                     color = PvTheme.extras.textoSuave,
                 )
             }
-            MarcaPeritaVision(altura = 15.dp, modifier = Modifier.padding(end = 6.dp))
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
@@ -149,15 +133,19 @@ fun TelaConfiguracoes(
             }
             TituloSecao("Assistente de voz", origemCatalogo)
 
-            // ── ROTEIRO (trilha) ────────────────────────────────────────────
             CartaoPv {
                 CabecalhoCartao(titulo = "Roteiro do exame", grande = true)
-                TextoApoio("O passo a passo que a IA acompanha no exame. Vale para a próxima perícia.")
+                TextoApoio(
+                    "Qual prompt a IA carrega. No padrão a ponte escolhe pelos materiais que o Atena " +
+                        "cadastrou no caso e monta a sessão só com aquele roteiro — prompt menor, IA mais atenta. " +
+                        "Ninguém pergunta ao perito. Vale para a próxima sessão.",
+                )
                 Spacer(Modifier.height(10.dp))
                 OpcaoRadio(
                     marcada = trilha == ConfiguracoesApp.TRILHA_PERGUNTAR,
                     titulo = "Automático pelos materiais do caso",
-                    descricao = "Escolhido pelo que o Atena cadastrou. Recomendado.",
+                    descricao = "Camisa e calça viram vestuário, faca vira objeto cortante, calcinha vira peça íntima; " +
+                        "sem pista, assistente geral — padrão.",
                     onClick = { trilha = ConfiguracoesApp.TRILHA_PERGUNTAR; config.trilha = trilha },
                 )
                 catalogo.trilhas.forEach { t ->
@@ -170,10 +158,14 @@ fun TelaConfiguracoes(
                 }
             }
 
-            // ── PALAVRAS DE MODO ────────────────────────────────────────────
             CartaoPv {
                 CabecalhoCartao(titulo = "Palavras de comando", grande = true)
-                TextoApoio("Diga a palavra no início da frase e a IA troca de modo. Sem tocar na tela.")
+                TextoApoio(
+                    "A IA não precisa mais de \"PeritaVision\" a cada frase. Diga a palavra no " +
+                        "INÍCIO da frase (ou sozinha) e ela muda de modo — e fica nele até você trocar. " +
+                        "Tudo por voz: o perito de luvas não toca na tela. Prefira palavras curtas que não " +
+                        "apareçam na fala normal da bancada.",
+                )
                 Spacer(Modifier.height(10.dp))
                 var pConversa by remember { mutableStateOf(config.palavraConversa) }
                 var pSilencio by remember { mutableStateOf(config.palavraSilencio) }
@@ -184,79 +176,38 @@ fun TelaConfiguracoes(
                     onValueChange = { pConversa = it; config.palavraConversa = it },
                     rotulo = "Voltar a conversar (padrão: ${padrao["conversa"] ?: "assistente"})",
                 )
-                TextoApoio("A IA responde, conduz o roteiro e fotografa a pedido.")
+                TextoApoio("A IA responde, conduz o roteiro e tira foto a pedido.")
                 Spacer(Modifier.height(8.dp))
                 CampoPv(
                     valor = pSilencio,
                     onValueChange = { pSilencio = it; config.palavraSilencio = it },
                     rotulo = "Silêncio (padrão: ${padrao["silencio"] ?: "silêncio"})",
                 )
-                TextoApoio("A IA não fala, mas continua ouvindo e registrando para o laudo.")
+                TextoApoio("A IA não fala, mas continua ouvindo, transcrevendo para o laudo e registrando achados. \"O que foi salvo?\" ela lê mesmo assim.")
                 Spacer(Modifier.height(8.dp))
                 CampoPv(
                     valor = pPausa,
                     onValueChange = { pPausa = it; config.palavraPausa = it },
                     rotulo = "Pausar a gravação (padrão: ${padrao["pausa"] ?: "pausa"})",
                 )
-                TextoApoio("Nada é registrado até você retomar pela palavra de voltar a conversar.")
+                TextoApoio(
+                    "Para quando o perito vai fazer outra coisa: nada do que for dito vai para o laudo, " +
+                        "nenhum comando executa e a IA não fala. Ela continua ouvindo SÓ para reconhecer a " +
+                        "palavra de volta — diga \"assistente\" ou \"silêncio\" para retomar. Tudo por voz, sem tocar na tela.",
+                )
             }
 
-            // ── AVANÇADO ────────────────────────────────────────────────────
-            // Instalação, não operação: quem faz a perícia nunca precisa abrir.
-            // Recolhido para a tela ficar limpa numa demonstração; o resumo no
-            // topo do cartão já diz como está, sem precisar expandir.
-            var destino by remember { mutableStateOf(config.destinoVideo) }
-            var qualidade by remember { mutableStateOf(config.qualidadeVideoTablet) }
-            val noTablet = destino == ConfiguracoesApp.DESTINO_TABLET
-
-            TituloSecao("Avançado", "instalação — o perito não precisa mexer")
-            CartaoRecolhivel(
-                titulo = "Vídeo e modelo de IA",
-                resumo = if (noTablet) "Vídeo no tablet · ${if (qualidade == ConfiguracoesApp.QUALIDADE_1080P30) "1080p" else "720p"}"
-                else "Vídeo no servidor",
-                etiqueta = if (modelo.isBlank()) "padrão" else "personalizado",
-                tomEtiqueta = if (modelo.isBlank()) Tom.NEUTRO else Tom.OK,
-            ) {
-                Spacer(Modifier.height(6.dp))
-
-                // ── Destino do vídeo ────────────────────────────────────────
-                CabecalhoCartao(titulo = "Destino do vídeo")
-                TextoApoio("Pela internet até o servidor, ou direto ao tablet na Wi-Fi da bancada. Vale para a próxima perícia.")
-                Spacer(Modifier.height(10.dp))
-                OpcaoRadio(
-                    marcada = destino == ConfiguracoesApp.DESTINO_SERVIDOR,
-                    titulo = "Servidor",
-                    descricao = "Pela internet, como sempre. 540p.",
-                    onClick = { destino = ConfiguracoesApp.DESTINO_SERVIDOR; config.destinoVideo = destino },
+            CartaoPv {
+                CabecalhoCartao(
+                    titulo = "Modelo do Gemini",
+                    etiqueta = if (modelo.isBlank()) "padrão da ponte" else "personalizado",
+                    tomEtiqueta = if (modelo.isBlank()) Tom.NEUTRO else Tom.OK,
+                    grande = true,
                 )
-                OpcaoRadio(
-                    marcada = noTablet,
-                    titulo = "Tablet, pela Wi-Fi da bancada",
-                    descricao = "Mais qualidade; os arquivos sobem ao servidor ao finalizar. Óculos e tablet na mesma rede.",
-                    onClick = { destino = ConfiguracoesApp.DESTINO_TABLET; config.destinoVideo = destino },
+                TextoApoio(
+                    "Modelo Live usado na conversa por voz. Nomes \"preview\" mudam — se o " +
+                        "Google aposentar um, troque aqui sem novo deploy.",
                 )
-                if (noTablet) {
-                    OpcaoRadio(
-                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_720P30,
-                        titulo = "720p · 30 fps",
-                        descricao = "Recomendado. ~22 MB por minuto.",
-                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_720P30; config.qualidadeVideoTablet = qualidade },
-                    )
-                    OpcaoRadio(
-                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_1080P30,
-                        titulo = "1080p · 30 fps",
-                        descricao = "Se o 720p vier sem falha. ~37 MB por minuto.",
-                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_1080P30; config.qualidadeVideoTablet = qualidade },
-                    )
-                }
-
-                Spacer(Modifier.height(14.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                Spacer(Modifier.height(14.dp))
-
-                // ── Modelo da conversa por voz ──────────────────────────────
-                CabecalhoCartao(titulo = "Modelo da conversa por voz")
-                TextoApoio("Trocar aqui não exige novo deploy.")
                 Spacer(Modifier.height(10.dp))
                 OpcaoRadio(
                     marcada = modelo.isBlank(),
@@ -294,7 +245,119 @@ fun TelaConfiguracoes(
                 }
             }
 
-            RodapeAssinatura()
+            TituloSecao("Vídeo dos óculos", "para onde os óculos transmitem")
+            var destino by remember { mutableStateOf(config.destinoVideo) }
+            var qualidade by remember { mutableStateOf(config.qualidadeVideoTablet) }
+            var qualidadeServidor by remember { mutableStateOf(config.qualidadeVideoServidor) }
+            var enviarDepois by remember { mutableStateOf(config.videoEnviarDepois) }
+            CartaoPv {
+                CabecalhoCartao(
+                    titulo = "Destino do vídeo",
+                    etiqueta = if (destino == ConfiguracoesApp.DESTINO_TABLET) "tablet (teste)" else "servidor",
+                    tomEtiqueta = if (destino == ConfiguracoesApp.DESTINO_TABLET) Tom.ATENCAO else Tom.NEUTRO,
+                    grande = true,
+                )
+                TextoApoio(
+                    "Hoje os óculos mandam o vídeo pela internet até o servidor, e o tablet puxa de " +
+                        "volta para mostrar. No modo TABLET os óculos publicam para o próprio tablet, na " +
+                        "Wi-Fi da bancada: sem internet no caminho, mais qualidade, e os arquivos sobem ao " +
+                        "servidor quando a perícia termina. Óculos e tablet precisam estar na MESMA rede. " +
+                        "Vale para a próxima sessão.",
+                )
+                Spacer(Modifier.height(10.dp))
+                OpcaoRadio(
+                    marcada = destino == ConfiguracoesApp.DESTINO_SERVIDOR,
+                    titulo = "Servidor (como sempre)",
+                    descricao = "RTMP para a VPS · 540p · 15 fps · 1,2 Mbps — o que a internet da bancada aguenta.",
+                    onClick = { destino = ConfiguracoesApp.DESTINO_SERVIDOR; config.destinoVideo = destino },
+                )
+                if (destino == ConfiguracoesApp.DESTINO_SERVIDOR) {
+                    Spacer(Modifier.height(10.dp))
+                    TextoApoio("Fluidez do movimento (o teto dos óculos é 30 fps):")
+                    OpcaoRadio(
+                        marcada = qualidadeServidor != ConfiguracoesApp.QUALIDADE_SERVIDOR_FLUIDO,
+                        titulo = "540p · 15 fps · 1,2 Mbps (padrão)",
+                        descricao = "O que a internet da bancada aguentou em campo. ~9 MB por minuto.",
+                        onClick = {
+                            qualidadeServidor = ConfiguracoesApp.QUALIDADE_SERVIDOR_PADRAO
+                            config.qualidadeVideoServidor = qualidadeServidor
+                        },
+                    )
+                    OpcaoRadio(
+                        marcada = qualidadeServidor == ConfiguracoesApp.QUALIDADE_SERVIDOR_FLUIDO,
+                        titulo = "540p · 30 fps · 2,5 Mbps (fluido)",
+                        descricao = "Movimento no dobro de quadros, mesmo detalhe. Precisa de subida boa: " +
+                            "se o vídeo vier travado ou cortado, volte ao padrão. ~19 MB por minuto.",
+                        onClick = {
+                            qualidadeServidor = ConfiguracoesApp.QUALIDADE_SERVIDOR_FLUIDO
+                            config.qualidadeVideoServidor = qualidadeServidor
+                        },
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                OpcaoRadio(
+                    marcada = destino == ConfiguracoesApp.DESTINO_TABLET,
+                    titulo = "Tablet, pela Wi-Fi da bancada (teste)",
+                    descricao = "Os óculos publicam para este tablet. O cartão de visão mostra quadros/s e tamanho; os segmentos .flv sobem ao servidor no Finalizar.",
+                    onClick = { destino = ConfiguracoesApp.DESTINO_TABLET; config.destinoVideo = destino },
+                )
+                if (destino == ConfiguracoesApp.DESTINO_TABLET) {
+                    Spacer(Modifier.height(10.dp))
+                    TextoApoio("Quando o vídeo sobe para o servidor:")
+                    OpcaoRadio(
+                        marcada = !enviarDepois,
+                        titulo = "Durante a perícia (padrão)",
+                        descricao = "Cada trecho sobe assim que fecha; o Finalizar espera o envio terminar (até 3 min).",
+                        onClick = { enviarDepois = false; config.videoEnviarDepois = false },
+                    )
+                    OpcaoRadio(
+                        marcada = enviarDepois,
+                        titulo = "Guardar no tablet e enviar depois",
+                        descricao = "Faça vários protocolos com o vídeo ficando no tablet; o Finalizar é imediato. " +
+                            "Tudo sobe pelo botão Enviar agora, ou sozinho quando o tablet estiver em Wi-Fi sem perícia aberta — " +
+                            "e o laudo de cada perícia é gerado só depois que o vídeo dela subir. " +
+                            "A IA continua vendo a bancada pela imagem do tablet.",
+                        onClick = { enviarDepois = true; config.videoEnviarDepois = true },
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    TextoApoio("Qualidade pedida aos óculos (na rede local dá para pedir mais):")
+                    OpcaoRadio(
+                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_720P30,
+                        titulo = "720p · 30 fps · 3 Mbps",
+                        descricao = "Comece por aqui. ~22 MB por minuto.",
+                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_720P30; config.qualidadeVideoTablet = qualidade },
+                    )
+                    OpcaoRadio(
+                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_1080P30,
+                        titulo = "1080p · 30 fps · 5 Mbps",
+                        descricao = "Se o 720p vier sem falha. ~37 MB por minuto.",
+                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_1080P30; config.qualidadeVideoTablet = qualidade },
+                    )
+                    OpcaoRadio(
+                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_720P_FLUIDO,
+                        titulo = "720p · 30 fps · 6 Mbps (fluido)",
+                        descricao = "Os mesmos 30 fps do 720p, com o dobro de dados por quadro: " +
+                            "movimento liso e sem borrar. ~45 MB por minuto.",
+                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_720P_FLUIDO; config.qualidadeVideoTablet = qualidade },
+                    )
+                    OpcaoRadio(
+                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_1080P_FLUIDO,
+                        titulo = "1080p · 30 fps · 8 Mbps (fluido)",
+                        descricao = "O mais fluido que os óculos dão. Exige Wi-Fi 5 GHz boa e óculos perto " +
+                            "do roteador. ~60 MB por minuto.",
+                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_1080P_FLUIDO; config.qualidadeVideoTablet = qualidade },
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    TextoApoio(
+                        "Mais quadros por segundo NÃO deixa mais rápido — deixa o movimento liso. " +
+                            "Quem manda na nitidez é o bitrate dividido pelos quadros: por isso as opções " +
+                            "\"fluido\" pedem mais dados. Se o vídeo vier travado, desça uma opção.",
+                        Tom.NEUTRO,
+                    )
+                }
+            }
+
+            RodapeMarca("Facil Mova")
         }
         Spacer(Modifier.navigationBarsPadding())
     }

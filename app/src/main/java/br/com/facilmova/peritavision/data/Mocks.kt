@@ -2,10 +2,7 @@ package br.com.facilmova.peritavision.data
 
 import br.com.facilmova.peritavision.domain.SinteseCaso
 
-/**
- * MOCKS temporarios. Substituir por leitura real de barcode (ML Kit) e
- * consulta real ao sistema Atena via API quando o back-end estiver pronto.
- */
+/** MOCKS temporarios. */
 
 /** Leitura de codigo de barras / QR — mockada. */
 object BarcodeMock {

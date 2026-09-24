@@ -2,28 +2,34 @@ package br.com.facilmova.peritavision.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 
-/**
- * CONFIGURAÇÕES DO APP (aba "Configurações", engrenagem na barra de topo).
- *
- * Guardadas em SharedPreferences — sobrevivem a fechar o app, mas NÃO vão para
- * o backend: são escolhas do tablet, não da perícia. Hoje duas coisas, ambas
- * do assistente de voz (ponte Gemini Live):
- *
- *  - trilha  → qual roteiro a IA carrega. "perguntar" (padrão, nome mantido
- *              pela preferência já salva nos tablets) deixa a PONTE escolher
- *              pelos materiais do caso — ninguém pergunta ao perito; um id
- *              fixo ("A", "B", "nenhuma"...) força aquela trilha.
- *              A lista de ids vem do catálogo da ponte, então uma trilha nova
- *              registrada lá aparece aqui sem mexer no app.
- *  - modelo  → nome do modelo Gemini Live. Vazio = padrão do servidor.
- *
- * Valem para a PRÓXIMA sessão: a sessão em andamento já nasceu com as
- * escolhas anteriores.
- */
+/** CONFIGURAÇÕES DO APP (aba "Configurações", engrenagem na barra de topo). */
 class ConfiguracoesApp(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("pv_configuracoes", Context.MODE_PRIVATE)
+
+    // Segredos (senha do Wi-Fi) ficam cifrados; se o cofre não abrir, cai no prefs comum.
+    private val segredos: SharedPreferences = runCatching {
+        EncryptedSharedPreferences.create(
+            context,
+            "pv_segredos",
+            MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        )
+    }.getOrDefault(prefs)
+
+    init {
+        // Migração única: a senha gravada em claro vai para o cofre e sai do prefs comum.
+        if (segredos !== prefs && prefs.contains(CHAVE_WIFI_SENHA)) {
+            val antiga = prefs.getString(CHAVE_WIFI_SENHA, "") ?: ""
+            if (runCatching { segredos.edit().putString(CHAVE_WIFI_SENHA, antiga).commit() }.getOrDefault(false)) {
+                prefs.edit().remove(CHAVE_WIFI_SENHA).apply()
+            }
+        }
+    }
 
     /** "perguntar" ou o id de uma trilha do catálogo. */
     var trilha: String
@@ -35,29 +41,18 @@ class ConfiguracoesApp(context: Context) {
         get() = prefs.getString(CHAVE_MODELO, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_MODELO, v.trim()).apply()
 
-    /** Última matrícula que abriu uma perícia neste tablet — o campo já vem
-     *  preenchido na próxima vez (o tablet é compartilhado, mas quem usa
-     *  costuma ser o mesmo perito por dias). */
     var ultimaMatricula: String
         get() = prefs.getString(CHAVE_MATRICULA, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_MATRICULA, v.trim()).apply()
 
-    /** Wi-Fi do local, como digitado em Configurações. Fica salvo no tablet e
-     *  é ENVIADO SOZINHO aos óculos toda vez que eles conectam — o perito
-     *  digita a rede uma vez por local, não por perícia. A senha fica em
-     *  SharedPreferences privado do app (tablet de bancada, sem conta de
-     *  usuário); se isso virar problema, o caminho é EncryptedSharedPreferences. */
+    /** Wi-Fi do local, como digitado em Configurações. */
     var wifiSsid: String
         get() = prefs.getString(CHAVE_WIFI_SSID, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_WIFI_SSID, v).apply()
     var wifiSenha: String
-        get() = prefs.getString(CHAVE_WIFI_SENHA, "") ?: ""
-        set(v) = prefs.edit().putString(CHAVE_WIFI_SENHA, v).apply()
+        get() = segredos.getString(CHAVE_WIFI_SENHA, "") ?: ""
+        set(v) = segredos.edit().putString(CHAVE_WIFI_SENHA, v).apply()
 
-    /** PALAVRAS DE MODO do assistente (03/09/2026 — fim do "PeritaVision" a
-     *  cada frase). O perito diz a palavra no início da frase (ou sozinha) e a
-     *  IA muda de modo: conversa (responde), silêncio (só ouve e registra) ou
-     *  pausa (gravação parada, volta por voz). Vazio = padrão da ponte. */
     var palavraConversa: String
         get() = prefs.getString(CHAVE_PAL_CONVERSA, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_PAL_CONVERSA, v.trim()).apply()
@@ -68,11 +63,6 @@ class ConfiguracoesApp(context: Context) {
         get() = prefs.getString(CHAVE_PAL_PAUSA, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_PAL_PAUSA, v.trim()).apply()
 
-    /** PARA ONDE OS ÓCULOS MANDAM O VÍDEO (05/09/2026, teste de campo).
-     *  "servidor": RTMP para a VPS, como sempre foi — o vídeo cruza a internet e
-     *  o tablet puxa de volta para mostrar. "tablet": os óculos publicam para o
-     *  próprio tablet na Wi-Fi da bancada; o tablet grava, mostra e sobe os
-     *  segmentos ao servidor no fim. Sem internet no caminho do vídeo. */
     var destinoVideo: String
         get() = prefs.getString(CHAVE_DESTINO_VIDEO, DESTINO_SERVIDOR) ?: DESTINO_SERVIDOR
         set(v) = prefs.edit().putString(CHAVE_DESTINO_VIDEO, v).apply()
@@ -82,6 +72,14 @@ class ConfiguracoesApp(context: Context) {
     var qualidadeVideoTablet: String
         get() = prefs.getString(CHAVE_QUALIDADE_TABLET, QUALIDADE_720P30) ?: QUALIDADE_720P30
         set(v) = prefs.edit().putString(CHAVE_QUALIDADE_TABLET, v).apply()
+
+    var qualidadeVideoServidor: String
+        get() = prefs.getString(CHAVE_QUALIDADE_SERVIDOR, QUALIDADE_SERVIDOR_PADRAO) ?: QUALIDADE_SERVIDOR_PADRAO
+        set(v) = prefs.edit().putString(CHAVE_QUALIDADE_SERVIDOR, v).apply()
+
+    var videoEnviarDepois: Boolean
+        get() = prefs.getBoolean(CHAVE_VIDEO_ENVIAR_DEPOIS, false)
+        set(v) = prefs.edit().putBoolean(CHAVE_VIDEO_ENVIAR_DEPOIS, v).apply()
 
     val videoNoTablet: Boolean get() = destinoVideo == DESTINO_TABLET
 
@@ -107,10 +105,16 @@ class ConfiguracoesApp(context: Context) {
         private const val CHAVE_PAL_PAUSA = "assistente.palavra_pausa"
         private const val CHAVE_DESTINO_VIDEO = "video.destino"
         private const val CHAVE_QUALIDADE_TABLET = "video.qualidade_tablet"
+        private const val CHAVE_QUALIDADE_SERVIDOR = "video.qualidade_servidor"
+        private const val CHAVE_VIDEO_ENVIAR_DEPOIS = "video.enviar_depois"
         const val DESTINO_SERVIDOR = "servidor"
         const val DESTINO_TABLET = "tablet"
         const val QUALIDADE_720P30 = "720p30"
         const val QUALIDADE_1080P30 = "1080p30"
+        const val QUALIDADE_720P_FLUIDO = "720p30f"
+        const val QUALIDADE_1080P_FLUIDO = "1080p30f"
+        const val QUALIDADE_SERVIDOR_PADRAO = "540p15"
+        const val QUALIDADE_SERVIDOR_FLUIDO = "540p30f"
         val PALAVRAS_PADRAO = mapOf("conversa" to "assistente", "silencio" to "silêncio", "pausa" to "pausa")
     }
 }

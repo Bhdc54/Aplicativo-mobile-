@@ -1,13 +1,4 @@
-// Cartões do LAUDO e do assistente: o laudo em preenchimento, a ficha do
-// lacre lido e o estado da IA de bancada.
-//
-// Saíram do MainActivity.kt em 08/09/2026, quando ele passou de 3.100
-// linhas. Ficam no MESMO pacote e na mesma pasta de propósito: assim a
-// separação não exigiu mexer em import nenhum do projeto, e o risco de
-// uma mudança grande e não compilada aqui ficou perto de zero.
-//
-// `internal` e não `private` porque em Kotlin `private` vale só dentro do
-// arquivo, e quem chama estes cartões é o CaptureScreen, que ficou lá.
+// Cartões do LAUDO e do assistente: o laudo em preenchimento, a ficha do lacre lido e o estado da IA de bancada.
 package br.com.facilmova.peritavision
 
 import android.Manifest
@@ -124,13 +115,7 @@ internal data class SecaoLaudo(
     val itens: List<String> = emptyList(),
 )
 
-/**
- * Laudo pericial em preenchimento — as 8 seções do modelo POLITEC-MT, com o
- * que a sessão já sabe. Seções 1–3 vêm do ATENA (ou da ficha do lacre) na
- * abertura; 5 e 6 crescem com as fotos seladas e a narração do perito; 4, 7 e
- * 8 ficam pendentes até a revisão no painel. É acompanhamento: o laudo de
- * verdade continua sendo montado pelo servidor no Finalizar.
- */
+/** Laudo pericial em preenchimento — as 8 seções do modelo POLITEC-MT, com o que a sessão já sabe. */
 @Composable
 internal fun CartaoLaudoEmPreenchimento(
     protocolo: String,
@@ -142,12 +127,8 @@ internal fun CartaoLaudoEmPreenchimento(
 ) {
     val autoridade = caso?.autoridade ?: ficha?.solicitante
     val orgao = caso?.unidadeRequisitante ?: ficha?.unidadeRequisitante
-    // Data em ISO ("2026-02-04T04:00:00.000+00:00") não se lê numa bancada.
     val dataOcorrencia = dataLegivel(caso?.dataOcorrencia ?: ficha?.dataOcorrencia)
     val vitima = ficha?.vitima
-    // paraTela: o ATENA às vezes manda objeto onde devia vir texto, e o item
-    // chegava aqui como JSON cru ({"numeroProtocolo":"054466/2026"}). Some da
-    // tela; se sobrar nada, a seção fica pendente, que é a verdade.
     val materiais = paraTela(caso?.materiais?.ifEmpty { null } ?: ficha?.materiais ?: emptyList())
     val objetivos = paraTela(
         caso?.exames?.ifEmpty { null }
@@ -177,8 +158,6 @@ internal fun CartaoLaudoEmPreenchimento(
             dica = "Os achados que você enunciar (\"item um, sangue negativo\") entram aqui; as fotos viram figuras.",
             campos = listOf("Figuras" to "$fotosSeladas foto(s) selada(s) por hash", "Achados" to "${achados.size} registrado(s)"),
             itens = achados.takeLast(5)),
-        // Só o que DESCREVE entra: "Sim.", "firm", "eu quero capturar" são
-        // conversa com a IA e não são consideração de laudo nenhum.
         SecaoLaudo(6, "Considerações", preenchida = consideracoes.isNotEmpty(),
             dica = "O que você narrar na bancada entra aqui.",
             itens = consideracoes.takeLast(3).map { if (it.length > 180) it.take(180) + "…" else it }),
@@ -305,7 +284,6 @@ internal fun CartaoAssistenteIa(
     ativo: Boolean,
     /** o circuito de vídeo está de pé (quadros chegando ao servidor) */
     enxergando: Boolean,
-    /** a IA está REALMENTE olhando agora (janela aberta por pedido do perito) */
     olhandoAgora: Boolean,
     /** roteiro em uso ("Trilha A — Faca / perfurocortante"); null = indefinido */
     trilha: String?,
@@ -324,11 +302,7 @@ internal fun CartaoAssistenteIa(
     CartaoPv {
         CabecalhoCartao(
             titulo = "Assistente de voz",
-            // Estados de verdade, não dois: desligado / ativo (câmera em
-            // repouso, o normal) / olhando agora / sem imagem.
-            // Estados de verdade: desligado / perguntando a trilha / em conversa
-            // (olhando ou não) / ouvindo em silêncio. "Sem imagem" vira aviso
-            // no corpo do cartão, não etiqueta.
+            // Estados de verdade, não dois: desligado / ativo (câmera em repouso, o normal) / olhando agora / sem imagem.
             etiqueta = when {
                 !ativo -> "desligado"
                 perguntandoTrilha -> "perguntando o exame"
@@ -356,8 +330,6 @@ internal fun CartaoAssistenteIa(
             BotaoTonal(texto = "Ligar assistente", icone = R.drawable.ic_pv_mic, onClick = onAlternar)
             return@CartaoPv
         }
-        // Roteiro: qual prompt está guiando esta sessão (definido na triagem
-        // pela voz do perito, fixado em Configurações, ou mantido da memória).
         when {
             perguntandoTrilha -> TextoApoio(
                 "A ponte ainda está definindo o roteiro pelos materiais do caso…",
@@ -365,9 +337,6 @@ internal fun CartaoAssistenteIa(
             )
             trilha != null -> LinhaCampo("Roteiro", trilha)
         }
-        // O diagnóstico da saída de voz ("→ Mentra_Live_0706 · 20 trecho(s)")
-        // é para quem está depurando, não para o perito — e muito menos para
-        // quem assiste a uma perícia. Só o ERRO continua à vista.
         if (voz.startsWith("ERRO")) {
             TextoApoio("Voz $voz", Tom.ERRO)
         }

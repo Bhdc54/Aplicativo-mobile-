@@ -31,18 +31,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import br.com.facilmova.peritavision.R
 
-/*
- * MARCA PERITAVISION — desenhada por vetor, não por imagem.
- *
- * O arquivo original (CorelDRAW) traz "PERITA" em ciano e "VISION" em cinza
- * claro, pensado para fundo escuro. No tablet a tela é clara: o cinza #CCCCCC
- * sumiria. Então a marca é desenhada aqui com DUAS cores independentes — o
- * ciano da marca fica fixo e a outra metade acompanha o tema, legível no claro
- * e no escuro. Sem PNG: fica nítida em qualquer densidade de tela.
- *
- * Proporção original: 921,31 × 89,42 (≈10,3 : 1). A altura manda; a largura
- * sai dela.
- */
+/** MARCA PERITAVISION — desenhada por vetor, não por imagem. */
 private const val LARGURA = 921.31f
 private const val ALTURA = 89.42f
 private const val PROPORCAO = LARGURA / ALTURA
@@ -76,11 +65,6 @@ private const val D_VISION =
     "M594.79,0L611.52,0L611.52,86.96L594.79,86.96Z M719.56,0L736.29,0L736.29,86.96L719.56,86.96Z " +
     "M848.17,0L853.2,0L864.77,11.25L921.31,66.08L921.31,89.42L864.9,34.7L864.9,86.96L848.17,86.96Z"
 
-/**
- * A marca PeritaVision. [altura] manda na largura (a proporção é fixa).
- * [corVision] só precisa ser informada quando o fundo não for o da superfície
- * do tema — por padrão ela segue o texto da tela.
- */
 @Composable
 fun MarcaPeritaVision(
     modifier: Modifier = Modifier,
@@ -99,17 +83,7 @@ fun MarcaPeritaVision(
     }
 }
 
-/**
- * ASSINATURA DO RODAPÉ — a marca PeritaVision e, abaixo, quem desenvolveu.
- *
- * A logo da Facilmova estava na barra de topo, disputando espaço com o brasão
- * da POLITEC, o nome do produto e a engrenagem. Desceu para cá (12/09/2026):
- * o topo fica do cliente, o rodapé assina o fornecedor — que é onde se procura
- * por essa informação, e não atrapalha quem está trabalhando.
- *
- * A logo da Facilmova é um PNG colorido feito para fundo claro, então continua
- * numa pílula branca: no tema escuro ela sumiria sobre o fundo da tela.
- */
+/** ASSINATURA DO RODAPÉ — a marca PeritaVision e, abaixo, quem desenvolveu. */
 @Composable
 fun RodapeAssinatura(modifier: Modifier = Modifier) {
     Column(
