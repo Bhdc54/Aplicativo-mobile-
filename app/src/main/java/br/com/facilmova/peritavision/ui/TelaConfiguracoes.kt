@@ -245,116 +245,73 @@ fun TelaConfiguracoes(
                 }
             }
 
-            TituloSecao("Vídeo dos óculos", "para onde os óculos transmitem")
-            var destino by remember { mutableStateOf(config.destinoVideo) }
+            TituloSecao("Vídeo dos óculos", "gravado no tablet, pela Wi-Fi da bancada")
             var qualidade by remember { mutableStateOf(config.qualidadeVideoTablet) }
-            var qualidadeServidor by remember { mutableStateOf(config.qualidadeVideoServidor) }
             var enviarDepois by remember { mutableStateOf(config.videoEnviarDepois) }
             CartaoPv {
                 CabecalhoCartao(
-                    titulo = "Destino do vídeo",
-                    etiqueta = if (destino == ConfiguracoesApp.DESTINO_TABLET) "tablet (teste)" else "servidor",
-                    tomEtiqueta = if (destino == ConfiguracoesApp.DESTINO_TABLET) Tom.ATENCAO else Tom.NEUTRO,
+                    titulo = "Vídeo no tablet",
+                    etiqueta = "Wi-Fi da bancada",
+                    tomEtiqueta = Tom.OK,
                     grande = true,
                 )
                 TextoApoio(
-                    "Hoje os óculos mandam o vídeo pela internet até o servidor, e o tablet puxa de " +
-                        "volta para mostrar. No modo TABLET os óculos publicam para o próprio tablet, na " +
-                        "Wi-Fi da bancada: sem internet no caminho, mais qualidade, e os arquivos sobem ao " +
-                        "servidor quando a perícia termina. Óculos e tablet precisam estar na MESMA rede. " +
-                        "Vale para a próxima sessão.",
+                    "Os óculos publicam o vídeo para este tablet, na Wi-Fi da bancada: sem internet no " +
+                        "caminho e com mais qualidade. Os arquivos sobem ao servidor conforme a opção abaixo. " +
+                        "Óculos e tablet precisam estar na MESMA rede. Vale para a próxima sessão.",
                 )
                 Spacer(Modifier.height(10.dp))
+                TextoApoio("Quando o vídeo sobe para o servidor:")
                 OpcaoRadio(
-                    marcada = destino == ConfiguracoesApp.DESTINO_SERVIDOR,
-                    titulo = "Servidor (como sempre)",
-                    descricao = "RTMP para a VPS · 540p · 15 fps · 1,2 Mbps — o que a internet da bancada aguenta.",
-                    onClick = { destino = ConfiguracoesApp.DESTINO_SERVIDOR; config.destinoVideo = destino },
+                    marcada = !enviarDepois,
+                    titulo = "Durante a perícia (padrão)",
+                    descricao = "Cada trecho sobe assim que fecha; o Finalizar espera o envio terminar (até 3 min).",
+                    onClick = { enviarDepois = false; config.videoEnviarDepois = false },
                 )
-                if (destino == ConfiguracoesApp.DESTINO_SERVIDOR) {
-                    Spacer(Modifier.height(10.dp))
-                    TextoApoio("Fluidez do movimento (o teto dos óculos é 30 fps):")
-                    OpcaoRadio(
-                        marcada = qualidadeServidor != ConfiguracoesApp.QUALIDADE_SERVIDOR_FLUIDO,
-                        titulo = "540p · 15 fps · 1,2 Mbps (padrão)",
-                        descricao = "O que a internet da bancada aguentou em campo. ~9 MB por minuto.",
-                        onClick = {
-                            qualidadeServidor = ConfiguracoesApp.QUALIDADE_SERVIDOR_PADRAO
-                            config.qualidadeVideoServidor = qualidadeServidor
-                        },
-                    )
-                    OpcaoRadio(
-                        marcada = qualidadeServidor == ConfiguracoesApp.QUALIDADE_SERVIDOR_FLUIDO,
-                        titulo = "540p · 30 fps · 2,5 Mbps (fluido)",
-                        descricao = "Movimento no dobro de quadros, mesmo detalhe. Precisa de subida boa: " +
-                            "se o vídeo vier travado ou cortado, volte ao padrão. ~19 MB por minuto.",
-                        onClick = {
-                            qualidadeServidor = ConfiguracoesApp.QUALIDADE_SERVIDOR_FLUIDO
-                            config.qualidadeVideoServidor = qualidadeServidor
-                        },
-                    )
-                    Spacer(Modifier.height(4.dp))
-                }
                 OpcaoRadio(
-                    marcada = destino == ConfiguracoesApp.DESTINO_TABLET,
-                    titulo = "Tablet, pela Wi-Fi da bancada (teste)",
-                    descricao = "Os óculos publicam para este tablet. O cartão de visão mostra quadros/s e tamanho; os segmentos .flv sobem ao servidor no Finalizar.",
-                    onClick = { destino = ConfiguracoesApp.DESTINO_TABLET; config.destinoVideo = destino },
+                    marcada = enviarDepois,
+                    titulo = "Guardar no tablet e enviar depois",
+                    descricao = "Faça vários protocolos com o vídeo ficando no tablet; o Finalizar é imediato. " +
+                        "Tudo sobe pelo botão Enviar agora, ou sozinho quando o tablet estiver em Wi-Fi sem perícia aberta — " +
+                        "e o laudo de cada perícia é gerado só depois que o vídeo dela subir. " +
+                        "A IA continua vendo a bancada pela imagem do tablet.",
+                    onClick = { enviarDepois = true; config.videoEnviarDepois = true },
                 )
-                if (destino == ConfiguracoesApp.DESTINO_TABLET) {
-                    Spacer(Modifier.height(10.dp))
-                    TextoApoio("Quando o vídeo sobe para o servidor:")
-                    OpcaoRadio(
-                        marcada = !enviarDepois,
-                        titulo = "Durante a perícia (padrão)",
-                        descricao = "Cada trecho sobe assim que fecha; o Finalizar espera o envio terminar (até 3 min).",
-                        onClick = { enviarDepois = false; config.videoEnviarDepois = false },
-                    )
-                    OpcaoRadio(
-                        marcada = enviarDepois,
-                        titulo = "Guardar no tablet e enviar depois",
-                        descricao = "Faça vários protocolos com o vídeo ficando no tablet; o Finalizar é imediato. " +
-                            "Tudo sobe pelo botão Enviar agora, ou sozinho quando o tablet estiver em Wi-Fi sem perícia aberta — " +
-                            "e o laudo de cada perícia é gerado só depois que o vídeo dela subir. " +
-                            "A IA continua vendo a bancada pela imagem do tablet.",
-                        onClick = { enviarDepois = true; config.videoEnviarDepois = true },
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    TextoApoio("Qualidade pedida aos óculos (na rede local dá para pedir mais):")
-                    OpcaoRadio(
-                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_720P30,
-                        titulo = "720p · 30 fps · 3 Mbps",
-                        descricao = "Comece por aqui. ~22 MB por minuto.",
-                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_720P30; config.qualidadeVideoTablet = qualidade },
-                    )
-                    OpcaoRadio(
-                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_1080P30,
-                        titulo = "1080p · 30 fps · 5 Mbps",
-                        descricao = "Se o 720p vier sem falha. ~37 MB por minuto.",
-                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_1080P30; config.qualidadeVideoTablet = qualidade },
-                    )
-                    OpcaoRadio(
-                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_720P_FLUIDO,
-                        titulo = "720p · 30 fps · 6 Mbps (fluido)",
-                        descricao = "Os mesmos 30 fps do 720p, com o dobro de dados por quadro: " +
-                            "movimento liso e sem borrar. ~45 MB por minuto.",
-                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_720P_FLUIDO; config.qualidadeVideoTablet = qualidade },
-                    )
-                    OpcaoRadio(
-                        marcada = qualidade == ConfiguracoesApp.QUALIDADE_1080P_FLUIDO,
-                        titulo = "1080p · 30 fps · 8 Mbps (fluido)",
-                        descricao = "O mais fluido que os óculos dão. Exige Wi-Fi 5 GHz boa e óculos perto " +
-                            "do roteador. ~60 MB por minuto.",
-                        onClick = { qualidade = ConfiguracoesApp.QUALIDADE_1080P_FLUIDO; config.qualidadeVideoTablet = qualidade },
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    TextoApoio(
-                        "Mais quadros por segundo NÃO deixa mais rápido — deixa o movimento liso. " +
-                            "Quem manda na nitidez é o bitrate dividido pelos quadros: por isso as opções " +
-                            "\"fluido\" pedem mais dados. Se o vídeo vier travado, desça uma opção.",
-                        Tom.NEUTRO,
-                    )
-                }
+                Spacer(Modifier.height(10.dp))
+                TextoApoio("Qualidade pedida aos óculos (na rede local dá para pedir mais):")
+                OpcaoRadio(
+                    marcada = qualidade == ConfiguracoesApp.QUALIDADE_720P30,
+                    titulo = "720p · 30 fps · 3 Mbps",
+                    descricao = "Comece por aqui. ~22 MB por minuto.",
+                    onClick = { qualidade = ConfiguracoesApp.QUALIDADE_720P30; config.qualidadeVideoTablet = qualidade },
+                )
+                OpcaoRadio(
+                    marcada = qualidade == ConfiguracoesApp.QUALIDADE_1080P30,
+                    titulo = "1080p · 30 fps · 5 Mbps",
+                    descricao = "Se o 720p vier sem falha. ~37 MB por minuto.",
+                    onClick = { qualidade = ConfiguracoesApp.QUALIDADE_1080P30; config.qualidadeVideoTablet = qualidade },
+                )
+                OpcaoRadio(
+                    marcada = qualidade == ConfiguracoesApp.QUALIDADE_720P_FLUIDO,
+                    titulo = "720p · 30 fps · 6 Mbps (fluido)",
+                    descricao = "Os mesmos 30 fps do 720p, com o dobro de dados por quadro: " +
+                        "movimento liso e sem borrar. ~45 MB por minuto.",
+                    onClick = { qualidade = ConfiguracoesApp.QUALIDADE_720P_FLUIDO; config.qualidadeVideoTablet = qualidade },
+                )
+                OpcaoRadio(
+                    marcada = qualidade == ConfiguracoesApp.QUALIDADE_1080P_FLUIDO,
+                    titulo = "1080p · 30 fps · 8 Mbps (fluido)",
+                    descricao = "O mais fluido que os óculos dão. Exige Wi-Fi boa (os óculos só usam 2,4 GHz) e óculos perto " +
+                        "do roteador. ~60 MB por minuto.",
+                    onClick = { qualidade = ConfiguracoesApp.QUALIDADE_1080P_FLUIDO; config.qualidadeVideoTablet = qualidade },
+                )
+                Spacer(Modifier.height(6.dp))
+                TextoApoio(
+                    "Mais quadros por segundo NÃO deixa mais rápido — deixa o movimento liso. " +
+                        "Quem manda na nitidez é o bitrate dividido pelos quadros: por isso as opções " +
+                        "\"fluido\" pedem mais dados. Se o vídeo vier travado, desça uma opção.",
+                    Tom.NEUTRO,
+                )
             }
 
             RodapeMarca("Facil Mova")

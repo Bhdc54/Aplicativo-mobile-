@@ -458,8 +458,8 @@ internal fun CartaoVisaoOculos(
             receptor.publicando && !recebendo -> "Óculos conectados ao tablet, mas sem quadro há mais de 4 s."
             receptor.publicando -> "Recebendo direto dos óculos pela Wi-Fi da bancada — sem internet no caminho."
             receptor.ultimoCliente != null ->
-                "Os óculos (${receptor.ultimoCliente}) chegaram ao tablet mas não começaram a publicar — handshake."
-            else -> "Aguardando os óculos publicarem em rtmp://${receptor.ip}:${receptor.porta}/pv/… (ninguém chegou à porta ainda)"
+                "Os óculos acharam o tablet, mas ainda não começaram a transmitir. Aguarde alguns segundos."
+            else -> "Aguardando os óculos transmitirem. Confira se estão na mesma Wi-Fi da bancada."
         }
         val comImagem = imagem != null && imagemEstado != null &&
             imagemEstado.decodificando && (imagemEstado.quadrosNaTela > 0 || recebendo)

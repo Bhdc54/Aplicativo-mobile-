@@ -63,10 +63,6 @@ class ConfiguracoesApp(context: Context) {
         get() = prefs.getString(CHAVE_PAL_PAUSA, "") ?: ""
         set(v) = prefs.edit().putString(CHAVE_PAL_PAUSA, v.trim()).apply()
 
-    var destinoVideo: String
-        get() = prefs.getString(CHAVE_DESTINO_VIDEO, DESTINO_SERVIDOR) ?: DESTINO_SERVIDOR
-        set(v) = prefs.edit().putString(CHAVE_DESTINO_VIDEO, v).apply()
-
     /** Perfil de captura quando o destino é o tablet. Na LAN dá para pedir mais
      *  que os 540p/15 fps que a VPS aguentava. */
     var qualidadeVideoTablet: String
@@ -81,7 +77,8 @@ class ConfiguracoesApp(context: Context) {
         get() = prefs.getBoolean(CHAVE_VIDEO_ENVIAR_DEPOIS, false)
         set(v) = prefs.edit().putBoolean(CHAVE_VIDEO_ENVIAR_DEPOIS, v).apply()
 
-    val videoNoTablet: Boolean get() = destinoVideo == DESTINO_TABLET
+    /** O vídeo dos óculos vai sempre para o tablet, pela Wi-Fi da bancada. */
+    val videoNoTablet: Boolean get() = true
 
     /** Mapa modo → palavra, só com as que o perito preencheu. */
     fun palavrasParaPonte(): Map<String, String> = buildMap {
@@ -103,12 +100,9 @@ class ConfiguracoesApp(context: Context) {
         private const val CHAVE_PAL_CONVERSA = "assistente.palavra_conversa"
         private const val CHAVE_PAL_SILENCIO = "assistente.palavra_silencio"
         private const val CHAVE_PAL_PAUSA = "assistente.palavra_pausa"
-        private const val CHAVE_DESTINO_VIDEO = "video.destino"
         private const val CHAVE_QUALIDADE_TABLET = "video.qualidade_tablet"
         private const val CHAVE_QUALIDADE_SERVIDOR = "video.qualidade_servidor"
         private const val CHAVE_VIDEO_ENVIAR_DEPOIS = "video.enviar_depois"
-        const val DESTINO_SERVIDOR = "servidor"
-        const val DESTINO_TABLET = "tablet"
         const val QUALIDADE_720P30 = "720p30"
         const val QUALIDADE_1080P30 = "1080p30"
         const val QUALIDADE_720P_FLUIDO = "720p30f"
