@@ -83,6 +83,8 @@ fun BarraDeTopo(
     @DrawableRes logo: Int,
     /** Engrenagem à direita do título: abre a aba Configurações. null = sem botão. */
     onConfiguracoes: (() -> Unit)? = null,
+    /** Selo ao lado do título (ex.: "Homologação"). null = sem selo. */
+    selo: String? = null,
 ) {
     Row(
         modifier = Modifier
@@ -108,11 +110,17 @@ fun BarraDeTopo(
         }
         Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                titulo,
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    titulo,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                if (selo != null) {
+                    Spacer(Modifier.width(8.dp))
+                    Etiqueta(selo.uppercase(), Tom.ATENCAO)
+                }
+            }
             Text(
                 subtitulo.uppercase(),
                 style = MaterialTheme.typography.labelSmall,

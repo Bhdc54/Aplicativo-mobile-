@@ -1957,6 +1957,7 @@ fun CaptureScreen() {
                 } else SLOGAN_APP,
                 logo = R.drawable.logo_politec,
                 onConfiguracoes = { mostrarConfiguracoes = true },
+                selo = if (BuildConfig.PV_HOMOLOG) "Homologação" else null,
             )
         }
         FaixaProntidao(prontidao)

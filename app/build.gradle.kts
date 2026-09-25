@@ -59,6 +59,7 @@ android {
         // Assistente IA de bancada (ponte Gemini Live). Vazio = recurso oculto.
         buildConfigField("String", "PV_PONTE_URL", segredo("pv.ponte"))
         buildConfigField("String", "PV_PONTE_TOKEN", segredo("pv.ponte.token"))
+        buildConfigField("boolean", "PV_HOMOLOG", "false")
     }
 
     signingConfigs {
@@ -94,6 +95,7 @@ android {
             buildConfigField("String", "PV_BACKEND", segredo("pv.backend.homolog"))
             buildConfigField("String", "PV_PONTE_URL", segredo("pv.ponte.homolog"))
             buildConfigField("String", "PV_PONTE_TOKEN", segredo("pv.ponte.token.homolog"))
+            buildConfigField("boolean", "PV_HOMOLOG", "true")
         }
     }
     compileOptions {
